@@ -1,0 +1,36 @@
+{
+  "name": "messageformat",
+  "version": "0.1.0",
+  "description": "MessageFormat syntax support for Zed editor",
+  "authors": ["Your Name"],
+  "repository": "https://github.com/yourusername/zed-messageformat",
+  "semantic_types": {
+    "comments": ["comment"],
+    "content": ["string", "string.quoted"],
+    "formatters": ["keyword.control"],
+    "operators": ["operator"],
+    "punctuation": ["punctuation"],
+    "selectors": ["variable"],
+    "variables": ["variable.other"]
+  },
+  "grammar": {
+    "language_id": "messageformat",
+    "textmate_scope": "source.messageformat",
+    "extensions": [".msg", ".messages"],
+    "parser": {
+      "language": "messageformat",
+      "grammar_path": "grammars/messageformat.json",
+      "injection_regex": "\\{.+[,}]"
+    }
+  },
+  "injection_grammar": {
+    "grammar_path": "grammars/injections.scm",
+    "parser": {
+      "language": "messageformat",
+      "grammar_path": "grammars/messageformat.json"
+    }
+  },
+  "language_configuration": {
+    "path": "language-configuration.json"
+  }
+}

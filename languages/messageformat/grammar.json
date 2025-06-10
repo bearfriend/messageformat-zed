@@ -1,0 +1,46 @@
+{
+  "name": "MessageFormat",
+  "scopeName": "source.messageformat",
+  "fileTypes": ["msg", "messages"],
+  "patterns": [
+    {
+      "name": "variable.other.messageformat",
+      "match": "\\{([^}]+)\\}",
+      "captures": {
+        "1": { "name": "entity.name.variable.messageformat" }
+      }
+    },
+    {
+      "name": "keyword.control.select.messageformat",
+      "match": "select|plural|selectordinal",
+      "captures": {
+        "0": { "name": "keyword.control.messageformat" }
+      }
+    },
+    {
+      "name": "constant.numeric.messageformat",
+      "match": "=\\d+",
+      "captures": {
+        "0": { "name": "constant.numeric.messageformat" }
+      }
+    },
+    {
+      "name": "keyword.other.messageformat",
+      "match": "other|zero|one|two|few|many",
+      "captures": {
+        "0": { "name": "keyword.other.messageformat" }
+      }
+    },
+    {
+      "name": "string.quoted.single.messageformat",
+      "begin": "'",
+      "end": "'",
+      "patterns": [
+        {
+          "name": "constant.character.escape.messageformat",
+          "match": "''"
+        }
+      ]
+    }
+  ]
+}
