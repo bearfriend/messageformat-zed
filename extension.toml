@@ -1,0 +1,11 @@
+id = "messageformat"
+name = "MessageFormat"
+version = "0.1.0"
+schema_version = 1
+authors = ["Danny Gleckler <daniel.gleckler@gmail.com>"]
+description = "MessageFormat syntax support for Zed editor"
+repository = "https://github.com/bearfriend/messageformat-zed"
+
+[grammars.messageformat]
+repository = "file://../tree-sitter-messageformat"
+rev = "HEAD"

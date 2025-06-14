@@ -1,3 +1,5 @@
-name = "messageformat"
+name = "MessageFormat"
 grammar = "messageformat"
-path_suffixes = ["xml", "messages", "json", "mf.js"]
+path_suffixes = ["msg", "messages", "mf", "mf.js", "mf.json"]
+tab_size = 2
+hard_tabs = true
