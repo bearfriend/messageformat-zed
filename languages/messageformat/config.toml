@@ -1,3 +1,3 @@
 name = "messageformat"
 grammar = "messageformat"
-path_suffixes = ["xml", "messages", "json"]
+path_suffixes = ["xml", "messages", "json", "mf.js"]
