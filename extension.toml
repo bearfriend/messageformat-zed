@@ -8,4 +8,9 @@ repository = "https://github.com/bearfriend/messageformat-zed"
 
 [grammars.messageformat]
 repository = "https://github.com/bearfriend/tree-sitter-messageformat"
-rev = "167f71059b3969bc44b2da1598d6682c033714d7"
+rev = "204d512b21f23849b4cad0f7ba40b5c934b2be9b"
+
+[grammars.messageformat_message]
+repository = "https://github.com/bearfriend/tree-sitter-messageformat"
+rev = "204d512b21f23849b4cad0f7ba40b5c934b2be9b"
+path = "message"

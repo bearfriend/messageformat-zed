@@ -1,0 +1,12 @@
+name = "MessageFormat Message"
+grammar = "messageformat_message"
+code_fence_block_name = "messageformat-message"
+# Not real file extensions. Zed resolves a Markdown code fence or an
+# `injection.language` string by language name *or* path suffix, so these are the
+# names this language answers to: the fence ```messageformat-message and the
+# grammar's own `injection.language "messageformat_message"`.
+path_suffixes = ["messageformat-message", "messageformat_message"]
+tab_size = 2
+brackets = [
+  { start = "{", end = "}", close = true, newline = false },
+]
