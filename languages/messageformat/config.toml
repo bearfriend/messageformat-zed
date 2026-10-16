@@ -1,5 +1,11 @@
 name = "MessageFormat"
 grammar = "messageformat"
 path_suffixes = ["msg", "messages", "mf", "mf.js", "mf.json"]
+line_comments = ["// "]
 tab_size = 2
 hard_tabs = true
+brackets = [
+  { start = "{", end = "}", close = true, newline = false },
+  { start = "\"", end = "\"", close = true, newline = false, not_in = ["string"] },
+  { start = "`", end = "`", close = true, newline = false, not_in = ["string"] },
+]
