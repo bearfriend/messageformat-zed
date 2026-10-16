@@ -1,0 +1,6 @@
+# Build artifacts
+target/
+extension.wasm
+
+# Zed clones the grammar here when installing the extension
+grammars/

@@ -7,5 +7,5 @@ description = "MessageFormat syntax support for Zed editor"
 repository = "https://github.com/bearfriend/messageformat-zed"
 
 [grammars.messageformat]
-repository = "file:///Users/danielgleckler/Sites/tree-sitter-messageformat"
-rev = "15ffb229df1605b3c34a096b531fd276a28581f9"
+repository = "https://github.com/bearfriend/tree-sitter-messageformat"
+rev = "167f71059b3969bc44b2da1598d6682c033714d7"
