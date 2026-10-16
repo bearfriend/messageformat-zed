@@ -2,6 +2,15 @@
 ; injections. This is the subset of ../../queries/highlights.scm that applies
 ; when the root is a message instead of a resource file.
 
+; Plain text is the translatable string, so it is highlighted as one. These are the
+; outermost captures: everything below (placeholders, keywords, punctuation, ...) is
+; nested inside and takes precedence, like inside a quoted string in a resource file.
+(text) @string
+(plural_case_body) @string
+(select_case_body) @string
+; A lone `'` is an apostrophe in the text (see grammar.js), not an escape
+(source_file "'" @string)
+
 ; Quoted and template strings inside plural / select case bodies
 (plural_case_body (quoted_string) @string)
 (plural_case_body (template_string) @string)
