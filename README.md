@@ -60,7 +60,7 @@ The ready-to-use host queries (JavaScript/TypeScript/TSX, JSON, HTML, Java, Kotl
    ```
 
 3. Commit `extension.toml` and `languages/*/*.scm` together.
-4. In Zed run **zed: rebuild dev extension** and open `test/sample.msg`.
+4. In Zed run **zed: rebuild dev extension** and open `test/sample.mf`.
 
 `scripts/sync-grammar.sh --check` verifies that the shipped queries equal the queries at each grammar's pinned `rev`; CI runs it on every push. Set `GRAMMAR_REPO=/path/to/local/checkout` to sync from a local clone (only committed content is used).
 
@@ -76,8 +76,8 @@ cargo check --target wasm32-wasip1  # the extension itself builds as wasm
 When `../tree-sitter-messageformat` is checked out next to this repo, the tests additionally verify that the queries only use node types that exist in each grammar, that they match the sibling's queries, and that every `injection.language` the grammar repo's host queries emit resolves to the message language.
 
 Manual test files:
-- `test/sample.msg` &mdash; open in Zed to check highlighting by eye
-- `test/manual/messages.msg` &mdash; larger sample in module form
+- `test/sample.mf` &mdash; open in Zed to check highlighting by eye
+- `test/manual/messages.mf.js` &mdash; larger sample in module form
 - `test/injection-test.mf.js` &mdash; JS sample of MessageFormat inside another language. Zed can't inject it yet (see above); the automated injection tests are in the grammar repo (`test/host-injections/`)
 
 Zed's log is at `~/Library/Logs/Zed/Zed.log` (macOS) if the extension fails to install.
