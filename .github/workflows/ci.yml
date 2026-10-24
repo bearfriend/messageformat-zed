@@ -23,3 +23,24 @@ jobs:
 
       - name: Shipped queries match the pinned grammar revision
         run: scripts/sync-grammar.sh --check
+
+  language-server:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [20, 22]
+    defaults:
+      run:
+        working-directory: lsp
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: lsp/package-lock.json
+
+      - run: npm ci
+
+      - run: npm test
