@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { test } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const server = fileURLToPath(new URL('../server.js', import.meta.url));
 
@@ -39,8 +42,9 @@ function startClient() {
 	return {
 		send,
 		child,
-		next(match, ms = 5000) {
-			const already = seen.find(match);
+		/** Resolves with the next matching message; `fresh` ignores messages that already arrived. */
+		next(match, ms = 5000, fresh = false) {
+			const already = fresh ? undefined : seen.find(match);
 			if (already) return Promise.resolve(already);
 			return new Promise((resolve, reject) => {
 				const timer = setTimeout(() => reject(new Error('timed out waiting for server message')), ms);
@@ -97,5 +101,49 @@ test('server publishes diagnostics with line/column ranges, updates on edit, and
 	}
 	finally {
 		await client.stop();
+	}
+});
+
+test('server compares against the source file on disk, prefers its open buffer, and revalidates dependants', async () => {
+	const dir = mkdtempSync(join(tmpdir(), 'mf-server-'));
+	const wrap = (...entries) => `export default {\n${entries.map(e => `\t${e},\n`).join('')}};\n`;
+	const enText = wrap('hello: "Hello {name}"', 'bye: "Goodbye"');
+	writeFileSync(join(dir, 'en.mf.js'), enText);
+	const frText = wrap('hello: "Bonjour {nom}"', 'extra: "Plus"');
+	writeFileSync(join(dir, 'fr.mf.js'), frText);
+	const enUri = pathToFileURL(join(dir, 'en.mf.js')).href;
+	const frUri = pathToFileURL(join(dir, 'fr.mf.js')).href;
+
+	const client = startClient();
+	try {
+		client.send({ id: 1, method: 'initialize', params: { processId: null, rootUri: null, capabilities: {} } });
+		await client.next(m => m.id === 1);
+		client.send({ method: 'initialized', params: {} });
+
+		// Only fr is open: its source (en) is read from disk.
+		client.send({ method: 'textDocument/didOpen', params: { textDocument: { uri: frUri, languageId: 'MessageFormat', version: 1, text: frText } } });
+		const first = (await client.next(diagnosticsFor(frUri))).params;
+		const codes = first.diagnostics.map(d => d.code).sort();
+		assert.deepEqual(codes, ['argument', 'extraneous', 'missing']);
+		const extraneous = first.diagnostics.find(d => d.code === 'extraneous');
+		assert.deepEqual(extraneous.range, { start: { line: 2, character: 1 }, end: { line: 2, character: 6 } });
+
+		// Open en with a changed buffer (not saved): fr must be compared against the buffer, not the disk copy.
+		const bufferText = wrap('hello: "Hello {nom}"', 'extra: "More"');
+		client.send({ method: 'textDocument/didOpen', params: { textDocument: { uri: enUri, languageId: 'MessageFormat', version: 1, text: bufferText } } });
+		const revalidated = (await client.next(diagnosticsFor(frUri), 5000, true)).params;
+		assert.deepEqual(revalidated.diagnostics.map(d => d.code), [], 'fr is clean against the unsaved en buffer');
+
+		// Editing the source revalidates the translation that depends on it.
+		client.send({
+			method: 'textDocument/didChange',
+			params: { textDocument: { uri: enUri, version: 2 }, contentChanges: [{ text: wrap('hello: "Hello {name}"', 'extra: "More"') }] },
+		});
+		const afterEdit = (await client.next(diagnosticsFor(frUri), 5000, true)).params;
+		assert.deepEqual(afterEdit.diagnostics.map(d => d.code), ['argument'], '{nom} no longer matches the source argument');
+	}
+	finally {
+		await client.stop();
+		rmSync(dir, { recursive: true, force: true });
 	}
 });

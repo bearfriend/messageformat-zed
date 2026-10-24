@@ -42,7 +42,7 @@ export function localeFromFileName(fileName, fallback = DEFAULT_LOCALE) {
 	return fallback;
 }
 
-/** Where each parsed entry's value text sits in the document. */
+/** Where each parsed entry's key and value text sit in the document. */
 function valueRanges(contents, parsed) {
 	const ranges = new Map();
 	let cursor = 0;
@@ -52,6 +52,7 @@ function valueRanges(contents, parsed) {
 		if (at === -1) continue;
 		cursor = at + text.length;
 		const lead = text.match(/^\s*/)[0].length;
+		const keyStart = at + lead + entry.keyQuote.length;
 		const start = at
 			+ lead
 			+ entry.keyQuote.length * 2
@@ -60,7 +61,15 @@ function valueRanges(contents, parsed) {
 			+ 1 // ":"
 			+ entry.valSpace.length
 			+ entry.valQuote.length;
-		ranges.set(key, { start, end: start + entry.val.length, message: entry.val });
+		ranges.set(key, {
+			key,
+			keyStart,
+			keyEnd: keyStart + entry.key.length,
+			start,
+			end: start + entry.val.length,
+			message: entry.val,
+			comment: entry.comment ?? '',
+		});
 	}
 	return ranges;
 }
@@ -108,20 +117,20 @@ function syntaxError(message, error) {
 	return { start, end, code, text };
 }
 
-function semanticIssues(message, locale) {
+function semanticIssues({ message, locale, source, overrides }) {
 	const issues = [];
 	const record = (severity) => (type, text, position) => issues.push({ severity, type, text, position });
 	const reporter = { error: record('error'), warning: record('warning'), config() {} };
 	try {
-		// There is no source locale for a single file, so the message is its own source. That makes the
-		// comparison checks (argument, option, untranslated, split) trivially clean and leaves
-		// `other`, `category-missing` and `category`.
+		// Without a source file the message is its own source. That makes the comparison checks
+		// (argument, option, untranslated, split) trivially clean and leaves `other`,
+		// `category-missing` and `category`.
 		validateMessage({
 			targetMessage: message,
 			targetLocale: locale,
-			sourceMessage: message,
-			sourceLocale: undefined,
-			overrides: [],
+			sourceMessage: source ? source.message : message,
+			sourceLocale: source?.locale,
+			overrides,
 		}, reporter);
 	}
 	catch {
@@ -130,10 +139,19 @@ function semanticIssues(message, locale) {
 	return issues;
 }
 
+const MAX_LISTED_KEYS = 8;
+
+function missingMessage(keys, sourceLocale) {
+	const listed = keys.slice(0, MAX_LISTED_KEYS).map(k => `"${k}"`).join(', ');
+	const more = keys.length > MAX_LISTED_KEYS ? ` and ${keys.length - MAX_LISTED_KEYS} more` : '';
+	return `${keys.length} ${keys.length === 1 ? 'message is' : 'messages are'} missing compared to ${sourceLocale}: ${listed}${more}`;
+}
+
 /**
  * @param {string} contents full document text
  * @param {string} fileName used only to pick the plural-rule locale
- * @param {{ defaultLocale?: string }} [options]
+ * @param {{ defaultLocale?: string, source?: { locale: string, contents: string } }} [options]
+ *   `source` is the source-locale file; with it, messages are also compared against their source.
  * @returns {{ start: number, end: number, severity: 'error' | 'warning', code: string, message: string }[]}
  */
 export function analyze(contents, fileName, options = {}) {
@@ -143,8 +161,11 @@ export function analyze(contents, fileName, options = {}) {
 
 	const { parsed, duplicateKeys } = parseLocales([{ contents, file }])[locale];
 	const ranges = valueRanges(contents, parsed);
+	const sourceParsed = options.source
+		? parseLocales([{ contents: options.source.contents, file: `${options.source.locale}.mf.js` }])[options.source.locale].parsed
+		: undefined;
 
-	for (const { start, end, message } of ranges.values()) {
+	for (const { key, keyStart, keyEnd, start, end, message, comment } of ranges.values()) {
 		const whole = { start, end: Math.max(end, start + 1) };
 		const add = (severity, code, text, range = whole) =>
 			diagnostics.push({ ...range, severity, code, message: text });
@@ -166,12 +187,23 @@ export function analyze(contents, fileName, options = {}) {
 				add('error', 'parse', err.text, { start: start + err.start, end: start + err.end });
 			}
 		}
+		if (sourceParsed && !sourceParsed[key]) {
+			add('error', 'extraneous', 'Message does not exist in the source locale', { start: keyStart, end: Math.max(keyEnd, keyStart + 1) });
+		}
 		if (syntaxFailed) continue;
 
-		for (const issue of semanticIssues(message, locale)) {
+		const source = sourceParsed?.[key]
+			? { message: String(sourceParsed[key].val), locale: options.source.locale }
+			: undefined;
+		const overrides = Array.from(comment.matchAll(/mfv-(?<override>[a-z]+)/g), m => m.groups.override);
+
+		for (const issue of semanticIssues({ message, locale, source, overrides })) {
 			switch (issue.type) {
 			case 'nbsp':
 				break; // reported above with an exact position
+			case 'source':
+				add('warning', 'source', `The source message for "${key}" could not be parsed`);
+				break;
 			case 'category': {
 				const name = issue.text.match(/Unsupported category "([^"]+)"/)?.[1];
 				const at = name ? message.lastIndexOf(name, issue.position?.column) : -1;
@@ -187,6 +219,21 @@ export function analyze(contents, fileName, options = {}) {
 
 	for (const { key, start, end } of duplicateKeyRanges(contents, duplicateKeys)) {
 		diagnostics.push({ start, end, severity: 'error', code: 'duplicate', message: `Duplicate key "${key}"` });
+	}
+
+	if (sourceParsed) {
+		const missing = Object.keys(sourceParsed).filter(key => !(key in parsed));
+		if (missing.length) {
+			// One summary at the top of the file: a translation in progress can lack dozens of keys.
+			const firstLine = contents.indexOf('\n');
+			diagnostics.push({
+				start: 0,
+				end: firstLine === -1 ? contents.length : firstLine,
+				severity: 'warning',
+				code: 'missing',
+				message: missingMessage(missing, options.source.locale),
+			});
+		}
 	}
 
 	return diagnostics.sort((a, b) => a.start - b.start);

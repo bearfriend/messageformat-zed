@@ -118,3 +118,105 @@ test('localeFromFileName', () => {
 	assert.equal(localeFromFileName('messages.mf.js', 'fr'), 'fr');
 	assert.equal(localeFromFileName(''), 'en');
 });
+
+// --- comparison against a source-locale file -------------------------------------------------
+
+const en = wrap(
+	'greeting: "Hello {name}"',
+	'items: "{n, plural, one {# item} other {# items}}"',
+	'pick: "{g, select, male {He} female {She} other {They}}"',
+	'title: "Dashboard"',
+);
+
+/** Like `run`, but compared against `en` (or another source) and returned as `[code, severity, text]`. */
+function runWithSource(doc, file = 'fr.mf.js', source = en, locale = 'en') {
+	return analyze(doc, file, { source: { locale, contents: source } }).map(d => [d.code, d.severity, doc.slice(d.start, d.end)]);
+}
+
+test('a faithful translation has no diagnostics', () => {
+	const doc = wrap(
+		'greeting: "Bonjour {name}"',
+		'items: "{n, plural, one {# article} many {# articles} other {# articles}}"',
+		'pick: "{g, select, male {Il} female {Elle} other {Iel}}"',
+		'title: "Tableau de bord"',
+	);
+	assert.deepEqual(runWithSource(doc), []);
+});
+
+test('a key that is not in the source is extraneous, underlining the key', () => {
+	const doc = wrap('greeting: "Bonjour {name}"', 'extra: "Plus"');
+	const found = runWithSource(doc).filter(d => d[0] === 'extraneous');
+	assert.deepEqual(found, [['extraneous', 'error', 'extra']]);
+});
+
+test('quoted extraneous keys underline the key without its quotes', () => {
+	const doc = wrap('"quoted.key": "x"');
+	assert.deepEqual(runWithSource(doc).filter(d => d[0] === 'extraneous'), [['extraneous', 'error', 'quoted.key']]);
+});
+
+test('missing messages are one warning at the top of the file, listing the keys', () => {
+	const doc = wrap('greeting: "Bonjour {name}"');
+	const [d] = analyze(doc, 'fr.mf.js', { source: { locale: 'en', contents: en } }).filter(x => x.code === 'missing');
+	assert.equal(d.severity, 'warning');
+	assert.equal(d.start, 0);
+	assert.equal(doc.slice(d.start, d.end), 'export default {');
+	assert.equal(d.message, '3 messages are missing compared to en: "items", "pick", "title"');
+});
+
+test('the missing summary is capped and singular/plural is right', () => {
+	const many = wrap(...Array.from({ length: 12 }, (_, i) => `k${i}: "x"`));
+	const [d] = analyze(wrap('k0: "x"'), 'fr.mf.js', { source: { locale: 'en', contents: many } }).filter(x => x.code === 'missing');
+	assert.match(d.message, /^11 messages are missing compared to en: "k1", .*"k8" and 3 more$/);
+	const [one] = analyze(wrap('a: "x"'), 'fr.mf.js', { source: { locale: 'en', contents: wrap('a: "x"', 'b: "y"') } }).filter(x => x.code === 'missing');
+	assert.match(one.message, /^1 message is missing/);
+});
+
+test('an unknown argument name is an error on the message', () => {
+	const doc = wrap('greeting: "Bonjour {nom}"');
+	assert.ok(runWithSource(doc).some(d => d[0] === 'argument' && d[1] === 'error' && d[2] === 'Bonjour {nom}'));
+});
+
+test('an unknown select option is reported against the source', () => {
+	const doc = wrap('pick: "{g, select, male {Il} female {Elle} other {Iel} robot {Bip}}"');
+	assert.ok(runWithSource(doc).some(d => d[0] === 'option'));
+});
+
+test('a missing select option is reported against the source', () => {
+	const doc = wrap('pick: "{g, select, male {Il} other {Iel}}"');
+	assert.ok(runWithSource(doc).some(d => d[0] === 'option-missing'));
+});
+
+test('an untranslated message is a warning, and mfv-translated silences it', () => {
+	const doc = wrap('title: "Dashboard"');
+	assert.ok(runWithSource(doc).some(d => d[0] === 'untranslated' && d[1] === 'warning'));
+	const silenced = wrap('title: "Dashboard", // mfv-translated');
+	assert.ok(!runWithSource(silenced).some(d => d[0] === 'untranslated'));
+});
+
+test('regional variants of the source language are not flagged untranslated', () => {
+	const doc = wrap('title: "Dashboard"');
+	assert.ok(!runWithSource(doc, 'en-gb.mf.js').some(d => d[0] === 'untranslated'));
+});
+
+test('syntax errors are reported once, not duplicated by the source comparison', () => {
+	const doc = wrap('greeting: "Bonjour {name"');
+	const codes = runWithSource(doc).map(d => d[0]);
+	assert.equal(codes.filter(c => c === 'parse').length, 1);
+});
+
+test('without a source, none of the comparison checks run', () => {
+	const doc = wrap('extra: "Plus"', 'title: "Dashboard"', 'greeting: "Bonjour {nom}"');
+	assert.deepEqual(run(doc, 'fr.mf.js'), []);
+});
+
+test('an unparseable source message is a warning on the translation, not an error', () => {
+	const doc = wrap('greeting: "Bonjour {name}"');
+	const found = analyze(doc, 'fr.mf.js', { source: { locale: 'en', contents: wrap('greeting: "Hello {name"') } });
+	const d = found.find(x => x.code === 'source');
+	assert.equal(d.severity, 'warning');
+	assert.match(d.message, /"greeting"/);
+});
+
+test('the source file itself is analysed without a source', () => {
+	assert.deepEqual(run(en, 'en.mf.js'), []);
+});
