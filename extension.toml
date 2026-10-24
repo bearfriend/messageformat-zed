@@ -6,6 +6,10 @@ authors = ["Danny Gleckler <daniel.gleckler@gmail.com>"]
 description = "MessageFormat syntax support for Zed editor"
 repository = "https://github.com/bearfriend/messageformat-zed"
 
+[language_servers.messageformat-language-server]
+name = "MessageFormat Language Server"
+languages = ["MessageFormat"]
+
 [grammars.messageformat]
 repository = "https://github.com/bearfriend/tree-sitter-messageformat"
 rev = "68354de74e4d75f026d7b5c17698386066f8adf6"

@@ -4,3 +4,9 @@ extension.wasm
 
 # Zed clones the grammar here when installing the extension
 grammars/
+
+# Language server dependencies
+node_modules/
+
+# macOS
+.DS_Store

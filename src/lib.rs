@@ -1,12 +1,117 @@
-use zed_extension_api as zed;
+use std::{env, fs, path::Path};
+use zed_extension_api::{self as zed, settings::CommandSettings, LanguageServerId, Result};
+
+/// Key of `[language_servers.*]` in `extension.toml`, and of `lsp.*` in the user's settings.
+const SERVER_ID: &str = "messageformat-language-server";
+/// The npm package that provides the server (`lsp/` in this repository).
+const PACKAGE_NAME: &str = "messageformat-language-server";
+/// Entry point of the package, relative to the extension's working directory.
+const SERVER_PATH: &str = "node_modules/messageformat-language-server/server.js";
 
 struct MessageFormatExtension {
-    // No additional state needed for basic grammar support
+    /// Set once the server is known to be installed, so later opens skip the npm checks.
+    server_ready: bool,
+}
+
+/// A command taken from `lsp.messageformat-language-server.binary` in the user's settings.
+/// Lets a local checkout of the server be used without publishing it.
+fn command_from_settings(binary: Option<CommandSettings>) -> Option<zed::Command> {
+    let binary = binary?;
+    Some(zed::Command {
+        command: binary.path?,
+        args: binary.arguments.unwrap_or_default(),
+        env: binary.env.unwrap_or_default().into_iter().collect(),
+    })
+}
+
+impl MessageFormatExtension {
+    fn server_installed() -> bool {
+        fs::metadata(SERVER_PATH).is_ok_and(|stat| stat.is_file())
+    }
+
+    /// Installs or updates the npm package if needed and returns the absolute path to its entry point.
+    fn server_script_path(&mut self, id: &LanguageServerId) -> Result<String> {
+        if !self.server_ready {
+            zed::set_language_server_installation_status(
+                id,
+                &zed::LanguageServerInstallationStatus::CheckingForUpdate,
+            );
+            // Offline or registry trouble must not break an already installed server.
+            let latest = zed::npm_package_latest_version(PACKAGE_NAME);
+            let installed = zed::npm_package_installed_version(PACKAGE_NAME)
+                .ok()
+                .flatten();
+            let up_to_date = Self::server_installed()
+                && latest
+                    .as_ref()
+                    .map_or(true, |latest| installed.as_ref() == Some(latest));
+
+            if !up_to_date {
+                zed::set_language_server_installation_status(
+                    id,
+                    &zed::LanguageServerInstallationStatus::Downloading,
+                );
+                let installed_ok = latest
+                    .and_then(|version| zed::npm_install_package(PACKAGE_NAME, &version));
+                match installed_ok {
+                    Ok(()) if Self::server_installed() => {}
+                    Ok(()) => {
+                        let message =
+                            format!("installed {PACKAGE_NAME}, but {SERVER_PATH} is missing");
+                        zed::set_language_server_installation_status(
+                            id,
+                            &zed::LanguageServerInstallationStatus::Failed(message.clone()),
+                        );
+                        return Err(message);
+                    }
+                    Err(_) if Self::server_installed() => {} // keep the version we have
+                    Err(error) => {
+                        zed::set_language_server_installation_status(
+                            id,
+                            &zed::LanguageServerInstallationStatus::Failed(error.clone()),
+                        );
+                        return Err(error);
+                    }
+                }
+            }
+            zed::set_language_server_installation_status(
+                id,
+                &zed::LanguageServerInstallationStatus::None,
+            );
+            self.server_ready = true;
+        }
+
+        let cwd = env::current_dir().map_err(|error| error.to_string())?;
+        Ok(cwd
+            .join(Path::new(SERVER_PATH))
+            .to_string_lossy()
+            .into_owned())
+    }
 }
 
 impl zed::Extension for MessageFormatExtension {
     fn new() -> Self {
-        Self {}
+        Self {
+            server_ready: false,
+        }
+    }
+
+    fn language_server_command(
+        &mut self,
+        language_server_id: &LanguageServerId,
+        worktree: &zed::Worktree,
+    ) -> Result<zed::Command> {
+        let settings = zed::settings::LspSettings::for_worktree(SERVER_ID, worktree).ok();
+        if let Some(command) = command_from_settings(settings.and_then(|s| s.binary)) {
+            return Ok(command);
+        }
+
+        let script = self.server_script_path(language_server_id)?;
+        Ok(zed::Command {
+            command: zed::node_binary_path()?,
+            args: vec![script, "--stdio".to_string()],
+            env: Default::default(),
+        })
     }
 }
 
@@ -81,6 +186,59 @@ mod tests {
         assert_eq!(grammars.len(), LANGS.len(), "extension.toml declares a grammar no test knows about");
         let cargo = toml("Cargo.toml");
         assert_eq!(ext["version"].as_str(), cargo["package"]["version"].as_str());
+    }
+
+    #[test]
+    fn language_server_is_declared_for_the_resource_language_only() {
+        let ext = toml("extension.toml");
+        let servers = ext["language_servers"].as_table().expect("[language_servers] table");
+        assert_eq!(servers.len(), 1, "unexpected language server declared");
+        let server = &servers[super::SERVER_ID];
+        assert!(!server["name"].as_str().unwrap_or("").is_empty());
+        // Zed matches by language *name*, so this has to be the name in config.toml.
+        let resource_name = toml("languages/messageformat/config.toml")["name"].as_str().unwrap().to_string();
+        assert_eq!(strings(&server["languages"]), [resource_name.as_str()]);
+    }
+
+    #[test]
+    fn server_constants_match_the_bundled_npm_package() {
+        let package: serde_json::Value =
+            serde_json::from_str(&read("lsp/package.json")).expect("lsp/package.json is JSON");
+        let name = package["name"].as_str().unwrap();
+        assert_eq!(name, super::PACKAGE_NAME);
+        let main = package["main"].as_str().unwrap();
+        assert_eq!(super::SERVER_PATH, format!("node_modules/{name}/{main}"));
+        assert!(root().join("lsp").join(main).exists(), "lsp/{main} does not exist");
+        assert!(
+            package["bin"][name].as_str() == Some(main),
+            "bin entry should point at the same file as main"
+        );
+    }
+
+    #[test]
+    fn settings_binary_overrides_the_installed_server() {
+        use super::command_from_settings;
+        use zed_extension_api::settings::CommandSettings;
+        use std::collections::HashMap;
+
+        assert!(command_from_settings(None).is_none());
+        // Arguments alone are not a command: fall back to the installed server.
+        let no_path = CommandSettings { path: None, arguments: Some(vec!["x".into()]), env: None };
+        assert!(command_from_settings(Some(no_path)).is_none());
+
+        let full = CommandSettings {
+            path: Some("/usr/local/bin/node".into()),
+            arguments: Some(vec!["/src/lsp/server.js".into(), "--stdio".into()]),
+            env: Some(HashMap::from([("DEBUG".to_string(), "1".to_string())])),
+        };
+        let command = command_from_settings(Some(full)).expect("command");
+        assert_eq!(command.command, "/usr/local/bin/node");
+        assert_eq!(command.args, ["/src/lsp/server.js", "--stdio"]);
+        assert_eq!(command.env, [("DEBUG".to_string(), "1".to_string())]);
+
+        let bare = CommandSettings { path: Some("mf-ls".into()), arguments: None, env: None };
+        let command = command_from_settings(Some(bare)).expect("command");
+        assert!(command.args.is_empty() && command.env.is_empty());
     }
 
     #[test]

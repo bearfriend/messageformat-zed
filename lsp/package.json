@@ -1,0 +1,32 @@
+{
+	"name": "messageformat-language-server",
+	"version": "0.1.0",
+	"description": "Language server that validates MessageFormat resource files (.mf, .mf.js) using messageformat-validator",
+	"type": "module",
+	"main": "server.js",
+	"bin": {
+		"messageformat-language-server": "server.js"
+	},
+	"files": [
+		"server.js",
+		"src"
+	],
+	"scripts": {
+		"test": "node --test test/*.test.js"
+	},
+	"engines": {
+		"node": ">=20"
+	},
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/bearfriend/messageformat-zed.git",
+		"directory": "lsp"
+	},
+	"dependencies": {
+		"@formatjs/icu-messageformat-parser": "^2.7.8",
+		"messageformat-validator": "^3.0.1",
+		"vscode-languageserver": "^9.0.1",
+		"vscode-languageserver-textdocument": "^1.0.12"
+	}
+}
