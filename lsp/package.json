@@ -1,6 +1,6 @@
 {
 	"name": "messageformat-language-server",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "Language server that validates MessageFormat resource files (.mf, .mf.js) using messageformat-validator",
 	"type": "module",
 	"main": "server.js",
