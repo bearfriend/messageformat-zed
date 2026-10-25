@@ -3,6 +3,7 @@ import { appendFileSync, readFileSync, watch } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+	CodeActionKind,
 	createConnection,
 	DiagnosticSeverity,
 	ProposedFeatures,
@@ -10,7 +11,8 @@ import {
 	TextDocumentSyncKind,
 } from 'vscode-languageserver/node.js';
 import { TextDocument } from 'vscode-languageserver-textdocument';
-import { analyze, DEFAULT_LOCALE } from './src/analyze.js';
+import { analyze, DEFAULT_LOCALE, entriesOf } from './src/analyze.js';
+import { fixesFor, rewritesFor } from './src/fixes.js';
 import { CONFIG_NAME, findConfig, resolveSource } from './src/source.js';
 
 const connection = createConnection(ProposedFeatures.all);
@@ -52,6 +54,7 @@ connection.onInitialize(({ initializationOptions, clientInfo, rootUri }) => {
 	return {
 		capabilities: {
 			textDocumentSync: TextDocumentSyncKind.Incremental,
+			codeActionProvider: { codeActionKinds: [CodeActionKind.QuickFix, CodeActionKind.RefactorRewrite] },
 		},
 		serverInfo: { name: 'messageformat-language-server' },
 	};
@@ -153,6 +156,8 @@ function watchedDirsOf(document) {
 	return dirs;
 }
 
+const analyzeWith = (document, source) => analyze(document.getText(), document.uri, { defaultLocale, source });
+
 function validate(document) {
 	let found;
 	try {
@@ -163,7 +168,7 @@ function validate(document) {
 			dependents.get(source.path).add(document.uri);
 		}
 		setWatched(document.uri, watchedDirsOf(document));
-		found = analyze(document.getText(), document.uri, { defaultLocale, source });
+		found = analyzeWith(document, source);
 		log(`validated ${document.uri} (languageId=${document.languageId}, v${document.version}, source=${source ? source.locale : 'none'}): ${found.length} diagnostic(s)`);
 	}
 	catch (error) {
@@ -212,6 +217,64 @@ documents.onDidClose(({ document }) => {
 	for (const uris of dependents.values()) uris.delete(document.uri);
 	setWatched(document.uri, new Set());
 	connection.sendDiagnostics({ uri: document.uri, diagnostics: [] });
+});
+
+const sameRange = (a, b) => a.start.line === b.start.line && a.start.character === b.start.character
+	&& a.end.line === b.end.line && a.end.character === b.end.character;
+
+connection.onCodeAction(({ textDocument, range, context }) => {
+	const document = documents.get(textDocument.uri);
+	const where = `${range.start.line}:${range.start.character}-${range.end.line}:${range.end.character}`;
+	if (!document) {
+		log(`codeAction ${textDocument.uri} ${where}: document is not open`);
+		return [];
+	}
+	// Fixes are derived from the document itself rather than from the diagnostics the client sends back,
+	// so they never depend on the client echoing our diagnostics faithfully (or at all).
+	const from = document.offsetAt(range.start);
+	const to = document.offsetAt(range.end);
+	const wanted = kind => !context.only?.length || context.only.some(only => kind === only || kind.startsWith(`${only}.`));
+	const actions = [];
+	const seen = new Set();
+	const offer = ({ title, kind = CodeActionKind.QuickFix, edits }, reported) => {
+		// Several diagnostics in one message can call for the same rewrite of it.
+		const identity = JSON.stringify([title, edits]);
+		if (!wanted(kind) || seen.has(identity)) return;
+		seen.add(identity);
+		actions.push({
+			title,
+			kind,
+			...(reported && { diagnostics: [reported] }),
+			edit: {
+				changes: {
+					[document.uri]: edits.map(e => ({
+						range: { start: document.positionAt(e.start), end: document.positionAt(e.end) },
+						newText: e.newText,
+					})),
+				},
+			},
+		});
+	};
+	try {
+		const text = document.getText();
+		const source = loadSource(document);
+		for (const diagnostic of analyzeWith(document, source)) {
+			if (diagnostic.start > to || from > diagnostic.end) continue;
+			const lspRange = { start: document.positionAt(diagnostic.start), end: document.positionAt(diagnostic.end) };
+			const reported = context.diagnostics.find(d => d.code === diagnostic.code && sameRange(d.range, lspRange));
+			for (const fix of fixesFor(text, diagnostic)) offer(fix, reported);
+		}
+		for (const entry of entriesOf(text, document.uri, { defaultLocale, source })) {
+			// From the start of the key to just past the closing quote, so a cursor anywhere on the entry counts.
+			if (entry.keyStart - 1 > to || from > entry.end + 1) continue;
+			for (const rewrite of rewritesFor(entry)) offer(rewrite);
+		}
+	}
+	catch (error) {
+		connection.console.error(`Failed to compute code actions for ${document.uri}: ${error?.stack ?? error}`);
+	}
+	log(`codeAction ${textDocument.uri} ${where} (client sent ${context.diagnostics.length} diagnostic(s)): ${actions.length} action(s)`);
+	return actions;
 });
 
 documents.listen(connection);

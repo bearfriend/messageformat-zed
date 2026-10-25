@@ -49,6 +49,26 @@ Add `// mfv-translated` after an entry to mark a message as deliberately identic
 
 Changes made outside the editor are noticed too: the server watches the directory of each open file and the directory of its `mfv.config.json`, and re-checks when a `.mf`, `.mf.js` or `.js` file or the config changes there (for example after `git checkout`, or an `mfv`/translation tool rewriting the source). Files open in an editor buffer are never overridden by what is on disk. A config newly created in a parent directory that had none is only picked up when the file is reopened. This uses Node's file watching directly rather than Zed's LSP file-watcher registration, so it doesn't depend on client support, but it has been verified by tests only, not yet by hand in Zed.
 
+**Quick fixes.** Open the code actions menu on a diagnostic (the lightbulb, or `cmd-.` in Zed):
+
+| Code | Fix |
+| --- | --- |
+| `nbsp` | Replace the non-breaking space with a normal space |
+| `untranslated` | Add `mfv-translated` to a comment after the message |
+| `argument` | Correct argument names using the source message |
+| `category` | Rename an unsupported plural category (when exactly one supported category is unused), or remove the unsupported categories |
+| `category-missing` | Add the missing plural categories, copying `other`, in the usual order |
+| `other` | Add the missing `other` to a plural or a select, copying the last case |
+| `option-missing` | Add the select options the source message has, copying `other` |
+
+The `argument`, `category`, `category-missing`, `other` and `option-missing` fixes are done by `mfv`'s formatter, limited to the one change. Each is checked before it is offered: the fix has to make its diagnostic go away without introducing a new error, so some fixes are deliberately all-or-nothing. If only some argument names can be matched to the source, or the right name is ambiguous, nothing is offered. For the same reason, a select with a misspelt argument name doesn't get `other` or `option-missing` fixes until the `argument` fix has been applied. Spacing inside the message's braces is normalised.
+
+The formatter's `add` is what adds cases, and it adds both plural categories and select options. So adding a missing option to a message that also has a plural short of categories adds those categories too.
+
+There is also a **Format message with mfv** action (kind `refactor.rewrite`) for any entry under the cursor, with or without a diagnostic. It does what `mfv format` does by default: hoists selectors, sorts plural cases, and curls apostrophes. It never renames arguments.
+
+Not yet covered: removing `extraneous` or duplicate entries. The server computes fixes from the document itself, not from the diagnostics the client sends back. Invoking an action with `cmd-.` works in Zed, though the lightbulb does not always show up.
+
 Diagnostics only appear in files Zed treats as **MessageFormat**. Zed can't attach a language server to MessageFormat strings embedded in other languages (see below).
 
 ### Settings

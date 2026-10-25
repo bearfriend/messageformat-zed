@@ -51,7 +51,8 @@ function valueRanges(contents, parsed) {
 		const at = contents.indexOf(text, cursor);
 		if (at === -1) continue;
 		cursor = at + text.length;
-		const lead = text.match(/^\s*/)[0].length;
+		const leading = text.match(/^\s*/)[0];
+		const lead = leading.length;
 		const keyStart = at + lead + entry.keyQuote.length;
 		const start = at
 			+ lead
@@ -69,10 +70,15 @@ function valueRanges(contents, parsed) {
 			end: start + entry.val.length,
 			message: entry.val,
 			comment: entry.comment ?? '',
+			quote: entry.valQuote,
+			// Tabs the entry is indented by, which is where mfv's formatter puts the closing brace of a multi-line message.
+			baseTabs: tabsAtEnd(entry.valSpace.includes('\n') ? entry.valSpace : leading),
 		});
 	}
 	return ranges;
 }
+
+const tabsAtEnd = whitespace => whitespace.match(/\t*$/)[0].length;
 
 function escapeRegExp(s) {
 	return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -117,7 +123,7 @@ function syntaxError(message, error) {
 	return { start, end, code, text };
 }
 
-function semanticIssues({ message, locale, source, overrides }) {
+export function semanticIssues({ message, locale, source, overrides }) {
 	const issues = [];
 	const record = (severity) => (type, text, position) => issues.push({ severity, type, text, position });
 	const reporter = { error: record('error'), warning: record('warning'), config() {} };
@@ -148,27 +154,49 @@ function missingMessage(keys, sourceLocale) {
 }
 
 /**
- * @param {string} contents full document text
- * @param {string} fileName used only to pick the plural-rule locale
- * @param {{ defaultLocale?: string, source?: { locale: string, contents: string } }} [options]
- *   `source` is the source-locale file; with it, messages are also compared against their source.
- * @returns {{ start: number, end: number, severity: 'error' | 'warning', code: string, message: string }[]}
+ * Everything known about each entry (message) in the document: where it is, how it is quoted and indented,
+ * its locale, and its source message when there is one.
  */
-export function analyze(contents, fileName, options = {}) {
+function readEntries(contents, fileName, options) {
 	const locale = localeFromFileName(fileName, options.defaultLocale ?? DEFAULT_LOCALE);
-	const file = `${locale}.mf.js`;
-	const diagnostics = [];
-
-	const { parsed, duplicateKeys } = parseLocales([{ contents, file }])[locale];
-	const ranges = valueRanges(contents, parsed);
+	const { parsed, duplicateKeys } = parseLocales([{ contents, file: `${locale}.mf.js` }])[locale];
 	const sourceParsed = options.source
 		? parseLocales([{ contents: options.source.contents, file: `${options.source.locale}.mf.js` }])[options.source.locale].parsed
 		: undefined;
 
-	for (const { key, keyStart, keyEnd, start, end, message, comment } of ranges.values()) {
+	const entries = Array.from(valueRanges(contents, parsed).values(), range => ({
+		...range,
+		locale,
+		source: sourceParsed?.[range.key]
+			? { message: String(sourceParsed[range.key].val), locale: options.source.locale }
+			: undefined,
+		overrides: Array.from(range.comment.matchAll(/mfv-(?<override>[a-z]+)/g), m => m.groups.override),
+	}));
+	return { locale, parsed, duplicateKeys, sourceParsed, entries };
+}
+
+/** The entries of a document, as `analyze` sees them. Takes the same arguments as `analyze`. */
+export function entriesOf(contents, fileName, options = {}) {
+	return readEntries(contents, fileName, options).entries;
+}
+
+/**
+ * @param {string} contents full document text
+ * @param {string} fileName used only to pick the plural-rule locale
+ * @param {{ defaultLocale?: string, source?: { locale: string, contents: string } }} [options]
+ *   `source` is the source-locale file; with it, messages are also compared against their source.
+ * @returns {{ start: number, end: number, severity: 'error' | 'warning', code: string, message: string, entry?: object }[]}
+ *   `entry` is the entry the diagnostic is about, when it is about one (see `entriesOf`).
+ */
+export function analyze(contents, fileName, options = {}) {
+	const diagnostics = [];
+	const { parsed, duplicateKeys, sourceParsed, entries } = readEntries(contents, fileName, options);
+
+	for (const entry of entries) {
+		const { key, keyStart, keyEnd, start, end, message, locale, source, overrides } = entry;
 		const whole = { start, end: Math.max(end, start + 1) };
 		const add = (severity, code, text, range = whole) =>
-			diagnostics.push({ ...range, severity, code, message: text });
+			diagnostics.push({ ...range, severity, code, message: text, entry });
 
 		const nbsps = nbspRanges(message);
 		for (const range of nbsps) {
@@ -191,11 +219,6 @@ export function analyze(contents, fileName, options = {}) {
 			add('error', 'extraneous', 'Message does not exist in the source locale', { start: keyStart, end: Math.max(keyEnd, keyStart + 1) });
 		}
 		if (syntaxFailed) continue;
-
-		const source = sourceParsed?.[key]
-			? { message: String(sourceParsed[key].val), locale: options.source.locale }
-			: undefined;
-		const overrides = Array.from(comment.matchAll(/mfv-(?<override>[a-z]+)/g), m => m.groups.override);
 
 		for (const issue of semanticIssues({ message, locale, source, overrides })) {
 			switch (issue.type) {
