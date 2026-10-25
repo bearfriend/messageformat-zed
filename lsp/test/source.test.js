@@ -25,7 +25,7 @@ const summary = r => r && { locale: r.locale, file: r.path.slice(r.path.lastInde
 test('localeOf takes the name before the first dot, lowercased', () => {
 	assert.equal(localeOf('/a/fr-CA.mf.js'), 'fr-ca');
 	assert.equal(localeOf('en.js'), 'en');
-	assert.equal(localeOf('/a/b/pt.messages'), 'pt');
+	assert.equal(localeOf('/a/b/pt.mf'), 'pt');
 });
 
 test('defaults to en when no config exists', () => {

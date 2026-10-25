@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { test } from 'node:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -141,6 +141,202 @@ test('server compares against the source file on disk, prefers its open buffer, 
 		});
 		const afterEdit = (await client.next(diagnosticsFor(frUri), 5000, true)).params;
 		assert.deepEqual(afterEdit.diagnostics.map(d => d.code), ['argument'], '{nom} no longer matches the source argument');
+	}
+	finally {
+		await client.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test('initializationOptions.compareToSource=false skips source comparison but keeps standalone checks', async () => {
+	const dir = mkdtempSync(join(tmpdir(), 'mf-server-'));
+	const wrap = (...entries) => `export default {\n${entries.map(e => `\t${e},\n`).join('')}};\n`;
+	writeFileSync(join(dir, 'en.mf.js'), wrap('hello: "Hello {name}"', 'bye: "Goodbye"', 'items: "{n, plural, one {# a} other {# b}}"'));
+	// Differs from the source (argument, missing, extraneous) and has a plural without `many` for fr.
+	const frText = wrap('hello: "Bonjour {nom}"', 'extra: "Plus"', 'items: "{n, plural, one {# article} other {# articles}}"');
+	writeFileSync(join(dir, 'fr.mf.js'), frText);
+	const frUri = pathToFileURL(join(dir, 'fr.mf.js')).href;
+
+	const run = async (initializationOptions) => {
+		const client = startClient();
+		try {
+			client.send({ id: 1, method: 'initialize', params: { processId: null, rootUri: null, capabilities: {}, initializationOptions } });
+			await client.next(m => m.id === 1);
+			client.send({ method: 'initialized', params: {} });
+			client.send({ method: 'textDocument/didOpen', params: { textDocument: { uri: frUri, languageId: 'MessageFormat', version: 1, text: frText } } });
+			return (await client.next(diagnosticsFor(frUri))).params.diagnostics.map(d => d.code).sort();
+		}
+		finally {
+			await client.stop();
+		}
+	};
+
+	try {
+		assert.deepEqual(await run({}), ['argument', 'category-missing', 'extraneous', 'missing'], 'comparison is on by default');
+		assert.deepEqual(await run({ compareToSource: true }), ['argument', 'category-missing', 'extraneous', 'missing']);
+		assert.deepEqual(await run({ compareToSource: false }), ['category-missing']);
+		assert.deepEqual(await run({ compareToSource: 'no' }), ['argument', 'category-missing', 'extraneous', 'missing'], 'only a literal false disables it');
+		assert.deepEqual(await run({ compareToSource: 0 }), ['argument', 'category-missing', 'extraneous', 'missing'], 'other falsy values do not disable it');
+	}
+	finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+// --- Source files changing on disk -------------------------------------------------------------
+
+const wrapEntries = (...entries) => `export default {\n${entries.map(e => `\t${e},\n`).join('')}};\n`;
+const codesOf = (message) => message.params.diagnostics.map(d => d.code).sort();
+const withCodes = (uri, expected) => (m) => diagnosticsFor(uri)(m) && JSON.stringify(codesOf(m)) === JSON.stringify(expected);
+const quiet = (client, uri, ms = 800) => client.next(diagnosticsFor(uri), ms, true).then(
+	(m) => { throw new Error(`unexpected diagnostics for ${uri}: ${JSON.stringify(codesOf(m))}`); },
+	() => undefined,
+);
+
+async function withWatchedFixture(files, body) {
+	const dir = mkdtempSync(join(tmpdir(), 'mf-watch-'));
+	for (const [name, text] of Object.entries(files)) writeFileSync(join(dir, name), text);
+	const client = startClient();
+	try {
+		client.send({ id: 1, method: 'initialize', params: { processId: null, rootUri: null, capabilities: {} } });
+		await client.next(m => m.id === 1);
+		client.send({ method: 'initialized', params: {} });
+		const open = (name, version = 1, text = files[name]) => {
+			const uri = pathToFileURL(join(dir, name)).href;
+			client.send({ method: 'textDocument/didOpen', params: { textDocument: { uri, languageId: 'MessageFormat', version, text } } });
+			return uri;
+		};
+		await body({ client, dir, open, uriOf: name => pathToFileURL(join(dir, name)).href });
+	}
+	finally {
+		await client.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+test('a source file changed on disk revalidates the open translations that depend on it', async () => {
+	const fr = wrapEntries('hello: "Bonjour {nom}"');
+	await withWatchedFixture({ 'en.mf.js': wrapEntries('hello: "Hello {nom}"'), 'fr.mf.js': fr }, async ({ client, dir, open }) => {
+		const frUri = open('fr.mf.js');
+		await client.next(withCodes(frUri, []));
+
+		writeFileSync(join(dir, 'en.mf.js'), wrapEntries('hello: "Hello {name}"'));
+		await client.next(withCodes(frUri, ['argument']), 3000, true);
+
+		// Atomic save (write a temp file, rename over the source), as most editors do.
+		writeFileSync(join(dir, 'en.tmp'), wrapEntries('hello: "Hello {nom}"'));
+		renameSync(join(dir, 'en.tmp'), join(dir, 'en.mf.js'));
+		await client.next(withCodes(frUri, []), 3000, true);
+	});
+});
+
+test('a source file that appears, or a config added, on disk is picked up', async () => {
+	const fr = wrapEntries('hello: "Bonjour {nom}"', 'extra: "Plus"');
+	await withWatchedFixture({ 'fr.mf.js': fr }, async ({ client, dir, open }) => {
+		const frUri = open('fr.mf.js');
+		await client.next(withCodes(frUri, []));
+
+		writeFileSync(join(dir, 'en.mf.js'), wrapEntries('hello: "Hello {nom}"'));
+		await client.next(withCodes(frUri, ['extraneous']), 3000, true);
+
+		// A config naming another source switches the comparison.
+		writeFileSync(join(dir, 'de.mf.js'), wrapEntries('hello: "Hallo {name}"', 'extra: "Mehr"'));
+		writeFileSync(join(dir, 'mfv.config.json'), JSON.stringify({ source: 'de' }));
+		await client.next(withCodes(frUri, ['argument']), 3000, true);
+	});
+});
+
+test('disk changes do not override a source that is open in a buffer, or touch closed documents', async () => {
+	const files = { 'en.mf.js': wrapEntries('hello: "Hello {nom}"'), 'fr.mf.js': wrapEntries('hello: "Bonjour {nom}"') };
+	await withWatchedFixture(files, async ({ client, dir, open, uriOf }) => {
+		const frUri = open('fr.mf.js');
+		await client.next(withCodes(frUri, []));
+		open('en.mf.js');
+		await client.next(withCodes(frUri, []), 3000, true);
+
+		// en is open and unchanged in the editor, so its buffer wins over what is on disk.
+		writeFileSync(join(dir, 'en.mf.js'), wrapEntries('hello: "Hello {name}"'));
+		await quiet(client, frUri);
+
+		client.send({ method: 'textDocument/didClose', params: { textDocument: { uri: uriOf('fr.mf.js') } } });
+		await client.next(m => diagnosticsFor(frUri)(m) && m.params.version === undefined, 3000, true);
+		writeFileSync(join(dir, 'en.mf.js'), wrapEntries('hello: "Hello {other}"'));
+		await quiet(client, frUri);
+	});
+});
+
+test('compareToSource=false never watches the disk', async () => {
+	const dir = mkdtempSync(join(tmpdir(), 'mf-watch-'));
+	writeFileSync(join(dir, 'en.mf.js'), wrapEntries('hello: "Hello {nom}"'));
+	const frText = wrapEntries('hello: "Bonjour {nom}"');
+	const frUri = pathToFileURL(join(dir, 'fr.mf.js')).href;
+	const client = startClient();
+	try {
+		client.send({ id: 1, method: 'initialize', params: { processId: null, rootUri: null, capabilities: {}, initializationOptions: { compareToSource: false } } });
+		await client.next(m => m.id === 1);
+		client.send({ method: 'initialized', params: {} });
+		client.send({ method: 'textDocument/didOpen', params: { textDocument: { uri: frUri, languageId: 'MessageFormat', version: 1, text: frText } } });
+		await client.next(withCodes(frUri, []));
+		writeFileSync(join(dir, 'en.mf.js'), wrapEntries('hello: "Hello {name}"'));
+		await quiet(client, frUri);
+	}
+	finally {
+		await client.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test('a config in a parent directory is watched too', async () => {
+	const root = mkdtempSync(join(tmpdir(), 'mf-watch-'));
+	const dir = join(root, 'lang');
+	mkdirSync(dir);
+	writeFileSync(join(root, 'mfv.config.json'), JSON.stringify({ source: 'de' }));
+	writeFileSync(join(dir, 'de.mf.js'), wrapEntries('hello: "Hallo {name}"'));
+	writeFileSync(join(dir, 'en.mf.js'), wrapEntries('hello: "Hello {nom}"'));
+	const fr = wrapEntries('hello: "Bonjour {nom}"');
+	const frUri = pathToFileURL(join(dir, 'fr.mf.js')).href;
+	const client = startClient();
+	try {
+		client.send({ id: 1, method: 'initialize', params: { processId: null, rootUri: null, capabilities: {} } });
+		await client.next(m => m.id === 1);
+		client.send({ method: 'initialized', params: {} });
+		client.send({ method: 'textDocument/didOpen', params: { textDocument: { uri: frUri, languageId: 'MessageFormat', version: 1, text: fr } } });
+		await client.next(withCodes(frUri, ['argument']));
+
+		writeFileSync(join(root, 'mfv.config.json'), JSON.stringify({ source: 'en' }));
+		await client.next(withCodes(frUri, []), 3000, true);
+	}
+	finally {
+		await client.stop();
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test('watchers are released once the last document depending on a directory closes', async () => {
+	const dir = mkdtempSync(join(tmpdir(), 'mf-watch-'));
+	const logPath = join(dir, 'server.log');
+	writeFileSync(join(dir, 'en.mf.js'), wrapEntries('hello: "Hello"'));
+	const frText = wrapEntries('hello: "Bonjour"');
+	writeFileSync(join(dir, 'fr.mf.js'), frText);
+	const frUri = pathToFileURL(join(dir, 'fr.mf.js')).href;
+	const previous = process.env.MESSAGEFORMAT_LS_LOG;
+	process.env.MESSAGEFORMAT_LS_LOG = logPath;
+	const client = startClient();
+	process.env.MESSAGEFORMAT_LS_LOG = previous;
+	if (previous === undefined) delete process.env.MESSAGEFORMAT_LS_LOG;
+	const lines = () => readFileSync(logPath, 'utf8').split('\n');
+	try {
+		client.send({ id: 1, method: 'initialize', params: { processId: null, rootUri: null, capabilities: {} } });
+		await client.next(m => m.id === 1);
+		client.send({ method: 'initialized', params: {} });
+		client.send({ method: 'textDocument/didOpen', params: { textDocument: { uri: frUri, languageId: 'MessageFormat', version: 1, text: frText } } });
+		await client.next(diagnosticsFor(frUri));
+		assert.equal(lines().filter(l => l.endsWith(`watching ${dir}`)).length, 1);
+		assert.equal(lines().filter(l => l.endsWith(`unwatched ${dir}`)).length, 0);
+
+		client.send({ method: 'textDocument/didClose', params: { textDocument: { uri: frUri } } });
+		await client.next(m => diagnosticsFor(frUri)(m) && m.params.version === undefined, 3000, true);
+		assert.equal(lines().filter(l => l.endsWith(`unwatched ${dir}`)).length, 1);
 	}
 	finally {
 		await client.stop();

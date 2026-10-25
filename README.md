@@ -6,7 +6,7 @@ Two languages are included:
 
 | Language | Use | Matches |
 | --- | --- | --- |
-| **MessageFormat** | Resource files: `key: "message"` entries, optionally wrapped in `export default { ... };` | `.mf`, `.mf.js`, and the legacy `.msg`, `.messages` |
+| **MessageFormat** | Resource files: `key: "message"` entries, optionally wrapped in `export default { ... };` | `.mf` and `.mf.js` |
 | **MessageFormat Message** | A single bare message such as `Hello {name}!`, meant for embedding inside other files | Markdown fences ```` ```messageformat-message ````; no file extensions |
 
 ## Installing as a dev extension
@@ -18,7 +18,7 @@ Rust must be installed via `rustup`; Zed compiles the extension and the grammar 
 
 ## Language server
 
-Resource files (`.mf`, `.mf.js`, and the legacy `.msg`, `.messages`) get diagnostics from `messageformat-language-server` (source in [`lsp/`](lsp/)). Zed installs it from npm using its own Node.js, so nothing needs to be set up. The locale for plural rules comes from the file name up to the first dot (`fr-ca.mf.js` is `fr-ca`); a name that isn't a locale (`messages.mf.js`) is treated as `en`.
+Resource files (`.mf` and `.mf.js`) get diagnostics from `messageformat-language-server` (source in [`lsp/`](lsp/)). Zed installs it from npm using its own Node.js, so nothing needs to be set up. The locale for plural rules comes from the file name up to the first dot (`fr-ca.mf.js` is `fr-ca`); a name that isn't a locale (`messages.mf.js`) is treated as `en`.
 
 **Checks on every message**
 
@@ -47,7 +47,29 @@ Resource files (`.mf`, `.mf.js`, and the legacy `.msg`, `.messages`) get diagnos
 
 Add `// mfv-translated` after an entry to mark a message as deliberately identical to its source. The source is read from its open editor buffer if it has one, otherwise from disk, and editing it re-checks every translation open beside it.
 
+Changes made outside the editor are noticed too: the server watches the directory of each open file and the directory of its `mfv.config.json`, and re-checks when a `.mf`, `.mf.js` or `.js` file or the config changes there (for example after `git checkout`, or an `mfv`/translation tool rewriting the source). Files open in an editor buffer are never overridden by what is on disk. A config newly created in a parent directory that had none is only picked up when the file is reopened. This uses Node's file watching directly rather than Zed's LSP file-watcher registration, so it doesn't depend on client support, but it has been verified by tests only, not yet by hand in Zed.
+
 Diagnostics only appear in files Zed treats as **MessageFormat**. Zed can't attach a language server to MessageFormat strings embedded in other languages (see below).
+
+### Settings
+
+Options go under `initialization_options` in your Zed `settings.json`. Changing them restarts the server.
+
+```json
+"lsp": {
+  "messageformat-language-server": {
+    "initialization_options": {
+      "compareToSource": false,
+      "defaultLocale": "en"
+    }
+  }
+}
+```
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `compareToSource` | `true` | Set to `false` to turn off every check against a source locale (`extraneous`, `missing`, `argument`, `option`, `option-missing`, `untranslated`). Only a literal `false` disables it. The checks on every message still run. |
+| `defaultLocale` | `en` | Locale for plural rules when the file name isn't a locale (`messages.mf.js`). |
 
 ### Running a local copy of the server
 
@@ -93,7 +115,7 @@ tree-sitter-messageformat (grammar repo)             messageformat-zed (this rep
 
 This extension registers the **MessageFormat Message** language so that hosts *can* inject it, but **a Zed extension cannot add injections to a built-in language** ([zed#8795](https://github.com/zed-industries/zed/issues/8795), [zed#65382](https://github.com/zed-industries/zed/issues/65382)). Zed reads injections only from the host language's own `injections.scm`. So today:
 
-- `.mf` / `.mf.js` / `.msg` / `.messages` files are highlighted as resource files.
+- `.mf` / `.mf.js` files are highlighted as resource files.
 - Markdown fences tagged `messageformat-message` use the bare-message language (and plain `messageformat` fences use the resource-file language). *Resolution logic is from Zed's source; I haven't confirmed the rendering in Zed itself.*
 - MessageFormat strings inside `.js`, `.html`, `.java`, ... are **not** highlighted yet. That needs the host's `injections.scm` to change in Zed itself.
 

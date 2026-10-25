@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { appendFileSync, readFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, watch } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
 	createConnection,
@@ -10,12 +11,13 @@ import {
 } from 'vscode-languageserver/node.js';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { analyze, DEFAULT_LOCALE } from './src/analyze.js';
-import { resolveSource } from './src/source.js';
+import { CONFIG_NAME, findConfig, resolveSource } from './src/source.js';
 
 const connection = createConnection(ProposedFeatures.all);
 const documents = new TextDocuments(TextDocument);
 
 let defaultLocale = DEFAULT_LOCALE;
+let compareToSource = true;
 
 // Set MESSAGEFORMAT_LS_LOG=/path/to/file to also write a trace to a file (handy when the editor hides stderr).
 const logFile = process.env.MESSAGEFORMAT_LS_LOG;
@@ -45,6 +47,8 @@ connection.onInitialize(({ initializationOptions, clientInfo, rootUri }) => {
 	if (typeof initializationOptions?.defaultLocale === 'string') {
 		defaultLocale = initializationOptions.defaultLocale;
 	}
+	// Only a literal `false` opts out, so a typo can't silently disable the checks.
+	compareToSource = initializationOptions?.compareToSource !== false;
 	return {
 		capabilities: {
 			textDocumentSync: TextDocumentSyncKind.Incremental,
@@ -70,6 +74,7 @@ const filePathOf = (uri) => {
 
 /** The source-locale file for a document: its open buffer if it has one, otherwise the file on disk. */
 function loadSource(document) {
+	if (!compareToSource) return undefined;
 	const path = filePathOf(document.uri);
 	if (!path) return undefined;
 	const resolved = resolveSource(path);
@@ -88,6 +93,66 @@ function loadSource(document) {
 // source file path -> uris of the open documents that were last compared against it
 const dependents = new Map();
 
+// Directories watched on disk, so a source or config changed outside the editor is noticed.
+// directory -> { watcher, uris: open documents that depend on something in it }
+const watched = new Map();
+
+const isOpenPath = path => documents.all().some(d => filePathOf(d.uri) === path);
+
+function onDiskChange(dir, filename) {
+	const name = filename?.toString();
+	// Open buffers are authoritative (and already reported through didChange).
+	if (name && isOpenPath(join(dir, name))) return;
+	if (name && !/\.(mf|js)$/.test(name) && name !== CONFIG_NAME) return;
+	for (const uri of watched.get(dir)?.uris ?? []) {
+		const document = documents.get(uri);
+		if (document) schedule(document);
+	}
+}
+
+/** Makes `uri` the only document that depends on exactly `dirs`; empty `dirs` releases it. */
+function setWatched(uri, dirs) {
+	for (const [dir, entry] of watched) {
+		if (dirs.has(dir)) continue;
+		entry.uris.delete(uri);
+		if (!entry.uris.size) {
+			entry.watcher.close();
+			watched.delete(dir);
+			log(`unwatched ${dir}`);
+		}
+	}
+	for (const dir of dirs) {
+		let entry = watched.get(dir);
+		if (!entry) {
+			try {
+				const watcher = watch(dir, { persistent: false }, (_event, filename) => onDiskChange(dir, filename));
+				watcher.on('error', (error) => {
+					log(`stopped watching ${dir}: ${error.message}`);
+					watcher.close();
+					watched.delete(dir);
+				});
+				entry = { watcher, uris: new Set() };
+				watched.set(dir, entry);
+				log(`watching ${dir}`);
+			}
+			catch (error) {
+				log(`cannot watch ${dir}: ${error.message}`);
+				continue;
+			}
+		}
+		entry.uris.add(uri);
+	}
+}
+
+function watchedDirsOf(document) {
+	const path = filePathOf(document.uri);
+	if (!compareToSource || !path) return new Set();
+	const dirs = new Set([dirname(path)]);
+	const config = findConfig(dirname(path));
+	if (config) dirs.add(dirname(config.path));
+	return dirs;
+}
+
 function validate(document) {
 	let found;
 	try {
@@ -97,6 +162,7 @@ function validate(document) {
 			if (!dependents.has(source.path)) dependents.set(source.path, new Set());
 			dependents.get(source.path).add(document.uri);
 		}
+		setWatched(document.uri, watchedDirsOf(document));
 		found = analyze(document.getText(), document.uri, { defaultLocale, source });
 		log(`validated ${document.uri} (languageId=${document.languageId}, v${document.version}, source=${source ? source.locale : 'none'}): ${found.length} diagnostic(s)`);
 	}
@@ -144,6 +210,7 @@ documents.onDidClose(({ document }) => {
 	clearTimeout(timers.get(document.uri));
 	timers.delete(document.uri);
 	for (const uris of dependents.values()) uris.delete(document.uri);
+	setWatched(document.uri, new Set());
 	connection.sendDiagnostics({ uri: document.uri, diagnostics: [] });
 });
 
