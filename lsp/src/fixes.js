@@ -2,7 +2,7 @@
 // Pure and free of LSP types, like analyze.js, so every fix can be tested by applying it and re-analysing.
 import { parse } from '@formatjs/icu-messageformat-parser';
 import { formatMessageSync } from 'messageformat-validator';
-import { semanticIssues } from './analyze.js';
+import { entryEndAt, escapeRunsOf, semanticIssues } from './analyze.js';
 
 const NBSP = '\u00a0';
 export const TRANSLATED_MARKER = 'mfv-translated;';
@@ -46,6 +46,81 @@ function markTranslated(contents, { end }) {
 	}
 	const newText = gap > 0 ? `${TRANSLATED_MARKER} ` : ` ${TRANSLATED_MARKER} `;
 	return [{ title, edits: [{ start: textStart, end: textStart, newText }] }];
+}
+
+/** Closes the run that `start` is the apostrophe of: a one-character edit, so it works on a message that does not parse. */
+function closeEscapeRun(contents, { start, entry }) {
+	const run = entry && escapeRunsOf(entry).find(candidate => candidate.start === start);
+	if (!run) return [];
+	return [{
+		title: `Close the escape run with "'"`,
+		edits: [{ start: run.closeAt, end: run.closeAt, newText: run.closer }],
+	}];
+}
+
+// --- Fixes that remove or add whole entries ----------------------------------------------------
+
+const startOfLine = (contents, offset) => contents.lastIndexOf('\n', offset - 1) + 1;
+const eolOf = contents => contents.includes('\r\n') ? '\r\n' : '\n';
+
+/** The edit that deletes the lines of the entry spanning `entryStart` to `entryEnd`, or nothing if it shares its line with other code. */
+function removeLines(contents, entryStart, entryEnd, title) {
+	const start = startOfLine(contents, entryStart);
+	if (/\S/.test(contents.slice(start, entryStart))) return [];
+	const end = contents.startsWith('\r\n', entryEnd) ? entryEnd + 2 : contents.startsWith('\n', entryEnd) ? entryEnd + 1 : entryEnd;
+	return [{ title, edits: [{ start, end, newText: '' }] }];
+}
+
+function removeExtraneous(contents, { entry }) {
+	return entry ? removeLines(contents, entry.entryStart, entry.entryEnd, 'Remove this message, which the source does not have') : [];
+}
+
+function removeDuplicate(contents, { entryStart }) {
+	const entryEnd = entryStart === undefined ? undefined : entryEndAt(contents, entryStart);
+	return entryEnd === undefined ? [] : removeLines(contents, entryStart, entryEnd, 'Remove this duplicate message');
+}
+
+/** Copies the messages that the source has and the document lacks (see `copyPlan` in analyze.js). */
+function copyMissing(contents, { copy }) {
+	if (!copy) return [];
+	const eol = eolOf(contents);
+	let indent = '\t';
+	if (copy.first) {
+		const lead = contents.slice(startOfLine(contents, copy.first.entryStart), copy.first.entryStart);
+		if (/^[ \t]*$/.test(lead)) indent = lead;
+	}
+	const edits = [];
+	for (const { after, texts } of copy.groups) {
+		const lines = texts.map(text => indent + text);
+		if (after) {
+			const closeQuote = after.end + after.quote.length;
+			const comma = contents[closeQuote] === ',' ? '' : ',';
+			const addition = eol + lines.join(eol);
+			if (comma && closeQuote === after.entryEnd) {
+				edits.push({ start: closeQuote, end: closeQuote, newText: comma + addition });
+			}
+			else {
+				if (comma) edits.push({ start: closeQuote, end: closeQuote, newText: comma });
+				edits.push({ start: after.entryEnd, end: after.entryEnd, newText: addition });
+			}
+		}
+		else if (copy.first) {
+			const start = startOfLine(contents, copy.first.entryStart);
+			if (start !== copy.first.entryStart - indent.length) return [];
+			edits.push({ start, end: start, newText: lines.map(line => line + eol).join('') });
+		}
+		else {
+			// No entries at all: go right after the brace that opens the object.
+			const brace = contents.indexOf('{');
+			if (brace === -1) return [];
+			const restOfLine = contents.slice(brace + 1, contents.indexOf('\n', brace) === -1 ? undefined : contents.indexOf('\n', brace));
+			edits.push({ start: brace + 1, end: brace + 1, newText: eol + lines.join(eol) + (/\S/.test(restOfLine) ? eol : '') });
+		}
+	}
+	const title = copy.count === 1
+		? `Add the missing message, copied from ${copy.locale}`
+		: `Add the ${copy.count} missing messages, copied from ${copy.locale}`;
+	return [{ title, edits }];
 }
 
 // --- Fixes that rewrite a whole message with mfv's formatter -----------------------------------
@@ -140,6 +215,10 @@ export function rewritesFor(entry) {
 const FIXES = {
 	nbsp: replaceNbsp,
 	untranslated: markTranslated,
+	escape: closeEscapeRun,
+	extraneous: removeExtraneous,
+	duplicate: removeDuplicate,
+	missing: copyMissing,
 	argument: correctArguments,
 	category: renameOrRemoveCategory,
 	'category-missing': addCategories,

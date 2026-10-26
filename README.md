@@ -29,6 +29,7 @@ Resource files (`.mf` and `.mf.js`) get diagnostics from `messageformat-language
 | `category` | error | A plural category the locale doesn't have (`few` in English) |
 | `category-missing` | warning | A plural category the locale has but the message doesn't |
 | `nbsp` | error | A non-breaking space in the message structure |
+| `escape` | warning | An unterminated escape run: a `'` before `{`, `}`, `<` (or `#` in a plural) that is never closed, so it quotes the rest of the message. `'>` is an apostrophe, not a run. |
 | `duplicate` | error | The same key defined twice |
 
 **Checks against a source locale.** A translation is also compared with its source file, which must sit in the same directory:
@@ -55,11 +56,15 @@ Changes made outside the editor are noticed too: the server watches the director
 | --- | --- |
 | `nbsp` | Replace the non-breaking space with a normal space |
 | `untranslated` | Add `mfv-translated` to a comment after the message |
+| `escape` | Close the run with a `'` where it should end: before the `}` or closing tag that ends what it is in, otherwise at the end of the message |
 | `argument` | Correct argument names using the source message |
 | `category` | Rename an unsupported plural category (when exactly one supported category is unused), or remove the unsupported categories |
 | `category-missing` | Add the missing plural categories, copying `other`, in the usual order |
 | `other` | Add the missing `other` to a plural or a select, copying the last case |
 | `option-missing` | Add the select options the source message has, copying `other` |
+| `extraneous` | Remove the whole entry (its lines, comma and comment) |
+| `duplicate` | Remove the later definition; the first one is kept |
+| `missing` | Copy the missing messages from the source, each after the entry that precedes it in the source |
 
 The `argument`, `category`, `category-missing`, `other` and `option-missing` fixes are done by `mfv`'s formatter, limited to the one change. Each is checked before it is offered: the fix has to make its diagnostic go away without introducing a new error, so some fixes are deliberately all-or-nothing. If only some argument names can be matched to the source, or the right name is ambiguous, nothing is offered. For the same reason, a select with a misspelt argument name doesn't get `other` or `option-missing` fixes until the `argument` fix has been applied. Spacing inside the message's braces is normalised.
 
@@ -67,7 +72,9 @@ The formatter's `add` is what adds cases, and it adds both plural categories and
 
 There is also a **Format message with mfv** action (kind `refactor.rewrite`) for any entry under the cursor, with or without a diagnostic. It does what `mfv format` does by default: hoists selectors, sorts plural cases, and curls apostrophes. It never renames arguments.
 
-Not yet covered: removing `extraneous` or duplicate entries. The server computes fixes from the document itself, not from the diagnostics the client sends back. Invoking an action with `cmd-.` works in Zed, though the lightbulb does not always show up.
+The `extraneous`, `duplicate` and `missing` fixes edit whole entries rather than going through the formatter. Removing an entry deletes its lines, so nothing is offered if another entry or code shares the line. `missing` copies the source's key and message as it wrote them (quotes and escapes included, its comment left out), indented like the file's first entry, and adds the comma to the entry it follows if that lacks one. The copies are identical to the source, so they show up as `untranslated` warnings until translated, which makes a handy to-do list.
+
+The server computes fixes from the document itself, not from the diagnostics the client sends back. Invoking an action with `cmd-.` works in Zed, though the lightbulb does not always show up.
 
 Diagnostics only appear in files Zed treats as **MessageFormat**. Zed can't attach a language server to MessageFormat strings embedded in other languages (see below).
 

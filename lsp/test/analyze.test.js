@@ -71,6 +71,43 @@ test('non-breaking space with unbalanced braces reports both problems', () => {
 	assert.deepEqual(run(doc).map(d => d[0]).sort(), ['nbsp', 'parse']);
 });
 
+// --- escape ----------------------------------------------------------------------------------
+
+test('an unterminated escape run is a warning on the apostrophe that opens it', () => {
+	const doc = wrap('a: "l\'<b>abc</b>"');
+	assert.deepEqual(run(doc), [['escape', 'warning', "'"]]);
+	const [d] = analyze(doc, 'en.mf.js');
+	assert.equal(d.message, `Unterminated escape run before "<b". Close it with another "'".`);
+});
+
+test('escape: names what follows the apostrophe even at the end of the message', () => {
+	assert.equal(analyze(wrap('a: "a\'{"'), 'en.mf.js').find(d => d.code === 'escape').message, `Unterminated escape run before "{". Close it with another "'".`);
+});
+
+test('escape: the same text in two plural cases is two warnings, each on its own apostrophe', () => {
+	const doc = wrap('a: "{n, plural, one {l\'<b>abc</b>} other {l\'<b>abc</b>}}"');
+	const found = analyze(doc, 'en.mf.js').filter(d => d.code === 'escape');
+	assert.deepEqual(found.map(d => d.start), [doc.indexOf("'"), doc.lastIndexOf("'")]);
+	assert.ok(found.every(d => d.end - d.start === 1));
+});
+
+test('escape: is reported along with the syntax error it causes', () => {
+	const doc = wrap('a: "{n, plural, one {a \'<b>x} other {y}}"');
+	assert.deepEqual(run(doc).map(d => d[0]).sort(), ['escape', 'parse']);
+});
+
+test('escape: apostrophes that are not the start of a quote are not reported', () => {
+	assert.deepEqual(run(wrap('a: "t\'> l"', 'b: "it\'\'s {x}"', 'c: "it\'s {x}"', "d: \"'{x}'\"")), []);
+});
+
+test('escape: an apostrophe escaped for a single-quoted string is one apostrophe, and the range covers both characters', () => {
+	assert.deepEqual(run(wrap("a: 'it\\'s {x}'", "b: 'say \\'{x}\\' now'")), []);
+	assert.deepEqual(run(wrap("a: 'say \\'{x now'")), [['escape', 'warning', "\\'"]]);
+	// Escaped apostrophes before the run shift where it is in the document from where it is in the message.
+	assert.deepEqual(run(wrap("a: 'it\\'s \\'{x now'")), [['escape', 'warning', "\\'"]]);
+	assert.equal(analyze(wrap("a: 'it\\'s \\'{x now'"), 'en.mf.js')[0].start, wrap("a: 'it\\'s \\'{x now'").lastIndexOf("\\'"));
+});
+
 test('an entry whose text also appears inside an earlier multi-line value gets its own range', () => {
 	// Entry `b` is textually contained in the backtick value of `a`; a plain indexOf would find it there.
 	const doc = 'export default {\n\ta: `x\n\tb: "{y",\n`,\n\tb: "{y",\n};\n';

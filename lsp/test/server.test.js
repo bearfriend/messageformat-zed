@@ -501,6 +501,30 @@ test('code actions add the select options the source file has, and attach the di
 	});
 });
 
+test('code actions remove an extraneous or duplicate entry and copy a missing one, and attach the diagnostic they fix', async () => {
+	const lines = (...entries) => `export default {\n${entries.map(e => `\t${e}\n`).join('')}};\n`;
+	const enText = lines('hello: "Hello",', 'bye: "Bye",');
+	const frText = lines('hello: "Bonjour",', 'old: "Ancien", // gone', 'hello: "Salut",');
+	await withWatchedFixture({ 'en.mf.js': enText, 'fr.mf.js': frText }, async ({ client, open }) => {
+		const uri = open('fr.mf.js');
+		const published = (await client.next(diagnosticsFor(uri))).params.diagnostics;
+		const ask = askForActions(client, uri);
+		const fixFor = async (id, code, title) => {
+			const diagnostic = published.find(d => d.code === code);
+			assert.ok(diagnostic, `got ${JSON.stringify(published.map(d => d.code))}`);
+			const actions = await ask(id, diagnostic.range, { diagnostics: [diagnostic] });
+			const fix = actions.find(a => a.title === title);
+			assert.ok(fix, `got ${JSON.stringify(actions.map(a => a.title))}`);
+			assert.equal(fix.kind, 'quickfix');
+			assert.deepEqual(fix.diagnostics, [diagnostic]);
+			return applyTextEdits(frText, fix.edit.changes[uri]);
+		};
+		assert.equal(await fixFor(40, 'extraneous', 'Remove this message, which the source does not have'), lines('hello: "Bonjour",', 'hello: "Salut",'));
+		assert.equal(await fixFor(41, 'duplicate', 'Remove this duplicate message'), lines('hello: "Bonjour",', 'old: "Ancien", // gone'));
+		assert.equal(await fixFor(42, 'missing', 'Add the missing message, copied from en'), lines('hello: "Bonjour",', 'bye: "Bye",', 'old: "Ancien", // gone', 'hello: "Salut",'));
+	});
+});
+
 test('a message mfv would reformat gets a rewrite action under the cursor, and only for clients that want it', async () => {
 	const text = 'export default {\n\t"a": "It\'s {n, plural, other {x} one {y}}",\n\tb: "Hello",\n};\n';
 	await withWatchedFixture({ 'en.mf.js': text }, async ({ client, open }) => {

@@ -13,7 +13,7 @@ Requires Node.js 20 or later.
 
 ## Diagnostics
 
-Syntax errors, missing `other` options, invalid or missing plural categories for the file's locale, non-breaking spaces, and duplicate keys. When a source locale file sits beside the file (named by `"source"` in the nearest `mfv.config.json`, or `en` / `en-us` if present), translations are also checked for extraneous or missing keys, mismatched arguments and options, and untranslated messages.
+Syntax errors, missing `other` options, invalid or missing plural categories for the file's locale, non-breaking spaces, unterminated escape runs, and duplicate keys. When a source locale file sits beside the file (named by `"source"` in the nearest `mfv.config.json`, or `en` / `en-us` if present), translations are also checked for extraneous or missing keys, mismatched arguments and options, and untranslated messages.
 
 See the [full list of checks](https://github.com/bearfriend/messageformat-zed#language-server).
 

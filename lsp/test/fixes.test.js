@@ -378,9 +378,9 @@ test('argument: is not offered when only some of the names could be corrected', 
 	assert.deepEqual(offered(doc, 'argument', { source }), []);
 });
 
-test('rewritesFor: closes an unterminated quote rather than changing what the message says', () => {
+test('rewritesFor: closes an unterminated escape run rather than changing what the message says', () => {
 	const doc = wrap('a: "x \'{{ y {n}"');
-	assert.deepEqual(analyze(doc, 'en.mf.js'), []);
+	assert.deepEqual(codes(analyze(doc, 'en.mf.js')), ['escape']);
 	const text = applyEdits(doc, rewritesFor(entriesOf(doc, 'en.mf.js')[0])[0].edits);
 	assert.equal(text, wrap('a: "x \'{{ y {n}\'"'));
 	assert.deepEqual(analyze(text, 'en.mf.js'), []);
@@ -394,6 +394,250 @@ test('rewritesFor: formatting a message does not also correct its argument names
 	const text = applyEdits(doc, rewritesFor(entry)[0].edits);
 	assert.equal(text, lines('hello: "{n, plural, one {It\u2019s {Name}, y} other {It\u2019s {Name}, x}}"'));
 	assert.ok(analyze(text, 'fr.mf.js', { source }).some(d => d.code === 'argument'), 'still reported, for the argument fix to handle');
+});
+
+// --- escape ----------------------------------------------------------------------------------
+
+const CLOSE = `Close the escape run with "'"`;
+
+test('escape: closes the run at the end of the message and the warning goes away', () => {
+	const { text, fixes, after } = fix(wrap('a: "l\'<b>abc</b>"'), 'escape', { file: 'en.mf.js' });
+	assert.equal(fixes[0].title, CLOSE);
+	assert.equal(text, wrap('a: "l\'<b>abc</b>\'"'));
+	assert.deepEqual(after, []);
+});
+
+test('escape: closes the run before the brace of the case it is in, and fixes only the run it was asked about', () => {
+	const doc = wrap('a: "{n, plural, one {l\'<b>abc</b>} other {l\'<b>abc</b>}}"');
+	const { text, after } = fix(doc, 'escape', { file: 'en.mf.js' });
+	assert.equal(text, wrap('a: "{n, plural, one {l\'<b>abc</b>\'} other {l\'<b>abc</b>}}"'));
+	// The other run is still there, and with the first one closed it has nothing to be closed by, so the message no longer parses.
+	assert.deepEqual(codes(after), ['escape', 'parse']);
+	const again = fix(text, 'escape', { file: 'en.mf.js' });
+	assert.equal(again.text, wrap('a: "{n, plural, one {l\'<b>abc</b>\'} other {l\'<b>abc</b>\'}}"'));
+	assert.deepEqual(again.after, []);
+});
+
+test('escape: fixes a message that does not parse because of the run', () => {
+	const { text, before, after } = fix(wrap('a: "{n, plural, one {a \'<b>x} other {y}}"'), 'escape', { file: 'en.mf.js' });
+	assert.deepEqual(codes(before), ['escape', 'parse']);
+	assert.equal(text, wrap('a: "{n, plural, one {a \'<b>x\'} other {y}}"'));
+	assert.deepEqual(after, []);
+});
+
+test('escape: the apostrophe it adds is escaped in a single-quoted string, and not in the others', () => {
+	const single = fix(lines("a: 'l\\'<b>abc</b>'"), 'escape', { file: 'en.mf.js' });
+	assert.equal(single.text, lines("a: 'l\\'<b>abc</b>\\''"));
+	assert.deepEqual(single.after, []);
+	const tick = fix(lines('a: `l\'<b>abc</b>`'), 'escape', { file: 'en.mf.js' });
+	assert.equal(tick.text, lines('a: `l\'<b>abc</b>\'`'));
+});
+
+test('escape: a message that does not end the line is closed where the message ends', () => {
+	const { text } = fix(lines('a: "x \'{y", // note', 'b: "ok",'), 'escape', { file: 'en.mf.js' });
+	assert.equal(text, lines('a: "x \'{y\'", // note', 'b: "ok",'));
+});
+
+test('escape: with an escaped apostrophe before the run, the fix still lands at the end of the run', () => {
+	const doc = lines("a: 'it\\'s \\'<b>x</b> and more'");
+	const { text, after } = fix(doc, 'escape', { file: 'en.mf.js' });
+	assert.equal(text, lines("a: 'it\\'s \\'<b>x</b> and more\\''"));
+	assert.deepEqual(after, []);
+});
+
+test('escape: offers the fix for the run it was asked about, not the first one in the message', () => {
+	const doc = wrap('a: "{n, plural, one {l\'<b>abc</b>} other {l\'<b>abc</b>}}"');
+	const [first, second] = analyze(doc, 'en.mf.js').filter(d => d.code === 'escape');
+	const closing = doc.indexOf('} other');
+	assert.deepEqual(fixesFor(doc, first)[0].edits.map(e => e.start), [closing]);
+	assert.deepEqual(fixesFor(doc, second)[0].edits.map(e => e.start), [doc.lastIndexOf('}}')]);
+});
+
+test('escape: offers nothing for a diagnostic that is not at a run, or has no entry', () => {
+	const doc = wrap('a: "l\'<b>abc</b>"');
+	const [diagnostic] = analyze(doc, 'en.mf.js');
+	assert.deepEqual(fixesFor(doc, { ...diagnostic, start: diagnostic.start + 1 }), []);
+	assert.deepEqual(fixesFor(doc, { ...diagnostic, entry: undefined }), []);
+});
+
+// --- extraneous and duplicate ----------------------------------------------------------------
+
+const REMOVE_EXTRANEOUS = 'Remove this message, which the source does not have';
+const REMOVE_DUPLICATE = 'Remove this duplicate message';
+
+test('extraneous: removes the whole entry, with its comma and comment, and nothing else', () => {
+	const source = sourceOf('hello: "Hello"', 'bye: "Bye"');
+	const doc = lines('hello: "Bonjour",', 'old: "Ancien", // dropped from the app', 'bye: "Au revoir",');
+	const { text, fixes, after } = fix(doc, 'extraneous', { file: 'fr.mf.js', source });
+	assert.equal(fixes[0].title, REMOVE_EXTRANEOUS);
+	assert.equal(text, lines('hello: "Bonjour",', 'bye: "Au revoir",'));
+	assert.deepEqual(after, []);
+});
+
+test('extraneous: removes a multi-line message in full', () => {
+	const source = sourceOf('hello: "Hello"', 'bye: "Bye"');
+	const doc = lines('hello: "Bonjour",', 'old: `Ligne un\n\t\tligne deux`, // note', 'bye: "Au revoir",');
+	const { text, after } = fix(doc, 'extraneous', { source });
+	assert.equal(text, lines('hello: "Bonjour",', 'bye: "Au revoir",'));
+	assert.deepEqual(after, []);
+});
+
+test('extraneous: removes the last entry, which has no comma, and the first', () => {
+	const source = sourceOf('hello: "Hello"');
+	assert.equal(fix(lines('hello: "Bonjour",', 'old: "Ancien"'), 'extraneous', { source }).text, lines('hello: "Bonjour",'));
+	assert.equal(fix(lines('old: "Ancien",', 'hello: "Bonjour",'), 'extraneous', { source }).text, lines('hello: "Bonjour",'));
+});
+
+test('extraneous: fixes only the entry it was asked about', () => {
+	const source = sourceOf('hello: "Hello"');
+	const { text, after } = fix(lines('hello: "Bonjour",', 'one: "Un",', 'two: "Deux",'), 'extraneous', { source });
+	assert.equal(text, lines('hello: "Bonjour",', 'two: "Deux",'));
+	assert.deepEqual(codes(after), ['extraneous']);
+});
+
+test('extraneous: keeps the line endings of the file', () => {
+	const source = sourceOf('hello: "Hello"');
+	const doc = lines('hello: "Bonjour",', 'old: "Ancien",').replaceAll('\n', '\r\n');
+	assert.equal(fix(doc, 'extraneous', { source }).text, lines('hello: "Bonjour",').replaceAll('\n', '\r\n'));
+});
+
+test('extraneous: offers nothing for an entry that shares its line with something other than whitespace', () => {
+	const source = sourceOf('hello: "Hello"');
+	const doc = 'export default { old: "Ancien",\n\thello: "Bonjour",\n};\n';
+	assert.deepEqual(offered(doc, 'extraneous', { source }), []);
+});
+
+test('duplicate: removes the later definition and keeps the first', () => {
+	const doc = lines('a: "one",', 'b: "two",', 'a: "uno", // again');
+	const { text, fixes, after } = fix(doc, 'duplicate', { file: 'en.mf.js' });
+	assert.equal(fixes[0].title, REMOVE_DUPLICATE);
+	assert.equal(text, lines('a: "one",', 'b: "two",'));
+	assert.deepEqual(after, []);
+});
+
+test('duplicate: removes a quoted key and a multi-line message in full', () => {
+	const doc = lines('a: "one",', '"a": `uno\n\t\tdos`, // again', 'b: "two",');
+	const { text, after } = fix(doc, 'duplicate', { file: 'en.mf.js' });
+	assert.equal(text, lines('a: "one",', 'b: "two",'));
+	assert.deepEqual(after, []);
+});
+
+test('duplicate: with three definitions removes only the one it was asked about', () => {
+	const doc = lines('a: "one",', 'a: "two",', 'a: "three",');
+	const diagnostics = analyze(doc, 'en.mf.js').filter(d => d.code === 'duplicate');
+	assert.equal(diagnostics.length, 2);
+	const second = applyEdits(doc, fixesFor(doc, diagnostics[1])[0].edits);
+	assert.equal(second, lines('a: "one",', 'a: "two",'));
+	const first = applyEdits(doc, fixesFor(doc, diagnostics[0])[0].edits);
+	assert.equal(first, lines('a: "one",', 'a: "three",'));
+});
+
+test('duplicate: removes the last entry, which has no comma', () => {
+	const doc = lines('a: "one",', 'a: "uno"');
+	assert.equal(fix(doc, 'duplicate', { file: 'en.mf.js' }).text, lines('a: "one",'));
+});
+
+test('duplicate: keeps the line endings of the file', () => {
+	const doc = lines('a: "one",', 'b: "two",', 'a: "uno",').replaceAll('\n', '\r\n');
+	assert.equal(fix(doc, 'duplicate', { file: 'en.mf.js' }).text, lines('a: "one",', 'b: "two",').replaceAll('\n', '\r\n'));
+});
+
+// --- missing ---------------------------------------------------------------------------------
+
+test('missing: copies the missing messages after the entry that precedes them in the source', () => {
+	const source = sourceOf('a: "A"', 'b: "B {n}"', 'c: "C"', 'd: "D"');
+	const { text, fixes, before, after } = fix(lines('a: "Un",', 'd: "De",'), 'missing', { source });
+	assert.equal(fixes[0].title, 'Add the 2 missing messages, copied from en');
+	assert.equal(text, lines('a: "Un",', 'b: "B {n}",', 'c: "C",', 'd: "De",'));
+	assert.ok(!codes(before).includes('untranslated'));
+	assert.deepEqual(codes(after), ['untranslated', 'untranslated'], 'the copies are identical to the source, so they are listed as still to translate');
+});
+
+test('missing: puts messages that come first in the source before the first entry, and keeps the order of the source', () => {
+	const source = sourceOf('a: "A"', 'b: "B"', 'c: "C"', 'd: "D"');
+	const { text } = fix(lines('c: "Ce",'), 'missing', { source });
+	assert.equal(text, lines('a: "A",', 'b: "B",', 'c: "Ce",', 'd: "D",'));
+});
+
+test('missing: adds the comma that the entry it follows lacks', () => {
+	const source = sourceOf('a: "A"', 'b: "B"');
+	assert.equal(fix(lines('a: "Un"'), 'missing', { source }).text, lines('a: "Un",', 'b: "B",'));
+	assert.equal(fix(lines('a: "Un" // note'), 'missing', { source }).text, lines('a: "Un", // note', 'b: "B",'));
+	assert.equal(fix(lines('a: "Un", // note'), 'missing', { source }).text, lines('a: "Un", // note', 'b: "B",'));
+});
+
+test('missing: follows a multi-line entry', () => {
+	const source = sourceOf('a: "A"', 'b: "B"');
+	assert.equal(fix(lines('a: `Un\n\t\tdeux`, // note'), 'missing', { source }).text, lines('a: `Un\n\t\tdeux`, // note', 'b: "B",'));
+});
+
+test('missing: copies the key and message as the source wrote them, but not its comment', () => {
+	const source = { locale: 'en', contents: lines("'it\\'s': 'It\\'s {x}', // for the header", '"a-b": `Line one\n\t\tline two`,', 'plain: "P"') };
+	const { text } = fix(lines('plain: "Pe",'), 'missing', { source });
+	assert.equal(text, lines("'it\\'s': 'It\\'s {x}',", '"a-b": `Line one\n\t\tline two`,', 'plain: "Pe",'));
+});
+
+test('missing: indents the copies like the entries of the file', () => {
+	const source = sourceOf('a: "A"', 'b: "B"', 'c: "C"');
+	const doc = 'export default {\n  b: "Be",\n};\n';
+	assert.equal(fix(doc, 'missing', { source }).text, 'export default {\n  a: "A",\n  b: "Be",\n  c: "C",\n};\n');
+});
+
+test('missing: keeps the line endings of the file', () => {
+	const source = sourceOf('a: "A"', 'b: "B"', 'c: "C"');
+	const doc = lines('b: "Be"').replaceAll('\n', '\r\n');
+	assert.equal(fix(doc, 'missing', { source }).text, lines('a: "A",', 'b: "Be",', 'c: "C",').replaceAll('\n', '\r\n'));
+});
+
+test('missing: fills a file that has no messages yet', () => {
+	const source = sourceOf('a: "A"', 'b: "B"');
+	assert.equal(fix('export default {\n};\n', 'missing', { source }).text, lines('a: "A",', 'b: "B",'));
+});
+
+test('missing: fills a file with no messages whatever its line endings or layout', () => {
+	const source = sourceOf('a: "A"', 'b: "B"');
+	assert.equal(fix('export default {\r\n};\r\n', 'missing', { source }).text, lines('a: "A",', 'b: "B",').replaceAll('\n', '\r\n'));
+	assert.equal(fix('export default {};\n', 'missing', { source }).text, 'export default {\n\ta: "A",\n\tb: "B",\n};\n');
+	assert.equal(fix('export default {', 'missing', { source }).text, 'export default {\n\ta: "A",\n\tb: "B",');
+});
+
+test('missing: offers nothing when there is nowhere to put the messages', () => {
+	const source = sourceOf('a: "A"');
+	assert.deepEqual(offered('\n', 'missing', { source }), []);
+	assert.deepEqual(offered('export default { b: "Be",\n};\n', 'missing', { source: sourceOf('a: "A"', 'b: "B"') }), [], 'the first entry is on the line of the brace');
+	assert.deepEqual(fixesFor('export default {\n};\n', { start: 0, end: 1, code: 'missing' }), [], 'a diagnostic with no plan');
+});
+
+test('extraneous and duplicate: leave the blank line after the entry', () => {
+	const source = sourceOf('hello: "Hello"');
+	assert.equal(fix('export default {\n\thello: "Bonjour",\n\told: "Ancien",\n\n\t// more\n};\n', 'extraneous', { source }).text, 'export default {\n\thello: "Bonjour",\n\n\t// more\n};\n');
+	assert.equal(fix('export default {\n\ta: "one",\n\ta: "uno",\n\n\tb: "two",\n};\n', 'duplicate', { file: 'en.mf.js' }).text, 'export default {\n\ta: "one",\n\n\tb: "two",\n};\n');
+});
+
+test('duplicate: offers nothing when the document no longer has an entry where the diagnostic says', () => {
+	const doc = wrap('a: "one"', 'a: "two"');
+	const [diagnostic] = analyze(doc, 'en.mf.js').filter(d => d.code === 'duplicate');
+	assert.deepEqual(fixesFor(doc, { ...diagnostic, entryStart: 0 }), []);
+	assert.deepEqual(fixesFor(doc, { ...diagnostic, entryStart: undefined }), []);
+});
+
+test('missing: says "the missing message" for one, and copies only what is missing', () => {
+	const source = sourceOf('a: "A"', 'b: "B"');
+	const { fixes, text } = fix(lines('a: "Un",'), 'missing', { source });
+	assert.equal(fixes[0].title, 'Add the missing message, copied from en');
+	assert.equal(text, lines('a: "Un",', 'b: "B",'));
+});
+
+test('missing: names the source locale', () => {
+	const source = { locale: 'en-gb', contents: lines('a: "A"', 'b: "B"') };
+	assert.equal(fix(lines('a: "Un",'), 'missing', { source }).fixes[0].title, 'Add the missing message, copied from en-gb');
+});
+
+test('missing: more than the diagnostic lists are all copied', () => {
+	const keys = Array.from({ length: 12 }, (_, i) => `k${i}`);
+	const source = sourceOf(...keys.map(k => `${k}: "${k.toUpperCase()}"`));
+	const { text } = fix(lines('k0: "Z",'), 'missing', { source });
+	assert.equal(text, lines(`k0: "Z",`, ...keys.slice(1).map(k => `${k}: "${k.toUpperCase()}",`)));
 });
 
 const REMOVE = 'Remove unsupported plural categories';

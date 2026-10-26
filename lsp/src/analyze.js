@@ -1,7 +1,7 @@
 // Pure analysis: MessageFormat resource text in, diagnostics (document offsets) out.
 // No LSP types here so everything can be unit-tested directly.
 import { parse } from '@formatjs/icu-messageformat-parser';
-import { structureRegEx, validateMessage } from 'messageformat-validator';
+import { findUnterminatedEscapeRuns, structureRegEx, validateMessage } from 'messageformat-validator';
 
 // `parseLocales` is not part of messageformat-validator's public `exports`, so import it by file URL.
 const { parseLocales } = await import(new URL('./validate.js', import.meta.resolve('messageformat-validator')));
@@ -64,6 +64,9 @@ function valueRanges(contents, parsed) {
 			+ entry.valQuote.length;
 		ranges.set(key, {
 			key,
+			// From the key (or its quote) to the end of the line the entry ends on, past its comma and comment.
+			entryStart: at + lead,
+			entryEnd: at + text.length,
 			keyStart,
 			keyEnd: keyStart + entry.key.length,
 			start,
@@ -92,7 +95,7 @@ function duplicateKeyRanges(contents, duplicateKeys) {
 		const hits = Array.from(contents.matchAll(re));
 		for (const hit of hits.slice(1)) {
 			const start = hit.index + hit[1].length;
-			found.push({ key, start, end: start + key.length });
+			found.push({ key, start, end: start + key.length, entryStart: hit.index });
 		}
 	}
 	return found;
@@ -108,6 +111,37 @@ function nbspRanges(message) {
 		}
 	}
 	return found;
+}
+
+/**
+ * The unterminated escape runs of an entry's message, in document offsets. The message is judged as the string
+ * it stands for, with `\'` in a `'`-quoted string being an apostrophe, so `\'\'` is the doubled apostrophe that it means.
+ * `start` and `end` cover the apostrophe that opens the run (with its backslash, if it has one); `closeAt` is
+ * where the apostrophe that closes the run goes, and `closer` is how it is written in the document.
+ */
+export function escapeRunsOf({ message, quote, start: entryStart }) {
+	const escaped = `\\${quote}`;
+	let text = '';
+	const rawOffsets = [];
+	for (let i = 0; i < message.length;) {
+		rawOffsets.push(i);
+		if (message.startsWith(escaped, i)) {
+			text += quote;
+			i += 2;
+		}
+		else {
+			text += message[i++];
+		}
+	}
+	rawOffsets.push(message.length);
+
+	return findUnterminatedEscapeRuns(text).map(run => ({
+		start: entryStart + rawOffsets[run.start],
+		end: entryStart + rawOffsets[run.start + 1],
+		closeAt: entryStart + rawOffsets[run.end],
+		closer: quote === "'" ? "\\'" : "'",
+		before: text.slice(run.start + 1, run.start + 3),
+	}));
 }
 
 function syntaxError(message, error) {
@@ -154,6 +188,30 @@ function missingMessage(keys, sourceLocale) {
 }
 
 /**
+ * How to add the source's messages that the document lacks: each one is copied (key and message as the source
+ * wrote them, without its comment) after the nearest entry before it in the source that the document has, or before
+ * the first entry. `groups` are those places, in document order; `after` is the entry to follow, or nothing for the start.
+ */
+function copyPlan(sourceParsed, parsed, entries, locale) {
+	const byKey = new Map(entries.map(entry => [entry.key, entry]));
+	const groups = [];
+	let current = { after: undefined, texts: [] };
+	let count = 0;
+	for (const [key, found] of Object.entries(sourceParsed)) {
+		if (!(key in parsed)) {
+			current.texts.push(`${found.keyQuote}${key}${found.keyQuote}: ${found.valQuote}${found.val}${found.valQuote},`);
+			count++;
+		}
+		else if (byKey.has(key)) {
+			if (current.texts.length) groups.push(current);
+			current = { after: byKey.get(key), texts: [] };
+		}
+	}
+	if (current.texts.length) groups.push(current);
+	return { locale, count, groups, first: entries[0] };
+}
+
+/**
  * Everything known about each entry (message) in the document: where it is, how it is quoted and indented,
  * its locale, and its source message when there is one.
  */
@@ -173,6 +231,18 @@ function readEntries(contents, fileName, options) {
 		overrides: Array.from(range.comment.matchAll(/mfv-(?<override>[a-z]+)/g), m => m.groups.override),
 	}));
 	return { locale, parsed, duplicateKeys, sourceParsed, entries };
+}
+
+/**
+ * Where the entry that starts at `entryStart` ends, for an entry that `analyze` has no entry for because
+ * the key is a duplicate. It is found by parsing the document from there, so the entry is exactly what `mfv` reads.
+ */
+export function entryEndAt(contents, entryStart) {
+	const from = `\n${contents.slice(entryStart)}`;
+	const { parsed } = parseLocales([{ contents: from, file: 'x.mf.js' }]).x;
+	// The parser finds the first entry anywhere after the start, so make sure that is the one that starts there.
+	const [first] = Object.values(parsed);
+	return first && from.startsWith(String(first)) ? entryStart + String(first).length - 1 : undefined;
 }
 
 /** The entries of a document, as `analyze` sees them. Takes the same arguments as `analyze`. */
@@ -203,6 +273,11 @@ export function analyze(contents, fileName, options = {}) {
 			add('error', 'nbsp', 'Non-breaking space in message structure', { start: start + range.start, end: start + range.end });
 		}
 
+		// Reported even when it is also why the message does not parse: it is the cause the author needs to fix.
+		for (const run of escapeRunsOf(entry)) {
+			add('warning', 'escape', `Unterminated escape run before "${run.before}". Close it with another "'".`, { start: run.start, end: run.end });
+		}
+
 		let syntaxFailed = false;
 		try {
 			parse(message, { captureLocation: true, requiresOtherClause: false });
@@ -223,6 +298,7 @@ export function analyze(contents, fileName, options = {}) {
 		for (const issue of semanticIssues({ message, locale, source, overrides })) {
 			switch (issue.type) {
 			case 'nbsp':
+			case 'escape':
 				break; // reported above with an exact position
 			case 'source':
 				add('warning', 'source', `The source message for "${key}" could not be parsed`);
@@ -240,8 +316,8 @@ export function analyze(contents, fileName, options = {}) {
 
 	}
 
-	for (const { key, start, end } of duplicateKeyRanges(contents, duplicateKeys)) {
-		diagnostics.push({ start, end, severity: 'error', code: 'duplicate', message: `Duplicate key "${key}"` });
+	for (const { key, start, end, entryStart } of duplicateKeyRanges(contents, duplicateKeys)) {
+		diagnostics.push({ start, end, entryStart, severity: 'error', code: 'duplicate', message: `Duplicate key "${key}"` });
 	}
 
 	if (sourceParsed) {
@@ -255,6 +331,7 @@ export function analyze(contents, fileName, options = {}) {
 				severity: 'warning',
 				code: 'missing',
 				message: missingMessage(missing, options.source.locale),
+				copy: copyPlan(sourceParsed, parsed, entries, options.source.locale),
 			});
 		}
 	}
