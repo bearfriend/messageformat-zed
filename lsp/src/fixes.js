@@ -2,7 +2,7 @@
 // Pure and free of LSP types, like analyze.js, so every fix can be tested by applying it and re-analysing.
 import { parse } from '@formatjs/icu-messageformat-parser';
 import { formatMessageSync } from 'messageformat-validator';
-import { entryEndAt, escapeRunsOf, semanticIssues } from './analyze.js';
+import { entryAt, escapeRunsOf, semanticIssues } from './analyze.js';
 
 const NBSP = '\u00a0';
 export const TRANSLATED_MARKER = 'mfv-translated;';
@@ -53,7 +53,7 @@ function closeEscapeRun(contents, { start, entry }) {
 	const run = entry && escapeRunsOf(entry).find(candidate => candidate.start === start);
 	if (!run) return [];
 	return [{
-		title: `Close the escape run with "'"`,
+		title: `Close the escape run with “'”`,
 		edits: [{ start: run.closeAt, end: run.closeAt, newText: run.closer }],
 	}];
 }
@@ -63,25 +63,36 @@ function closeEscapeRun(contents, { start, entry }) {
 const startOfLine = (contents, offset) => contents.lastIndexOf('\n', offset - 1) + 1;
 const eolOf = contents => contents.includes('\r\n') ? '\r\n' : '\n';
 
-/** The edit that deletes the lines of the entry spanning `entryStart` to `entryEnd`, or nothing if it shares its line with other code. */
-function removeLines(contents, entryStart, entryEnd, title) {
+/**
+ * The edit that deletes the lines of the entry spanning `entryStart` to `entryEnd`, or nothing if it shares its line with other code.
+ * In JSON the entry before the last one must also lose its comma, as the one it had is now the last.
+ */
+function removeLines(contents, { entryStart, entryEnd, comma, json }, title) {
 	const start = startOfLine(contents, entryStart);
 	if (/\S/.test(contents.slice(start, entryStart))) return [];
 	const end = contents.startsWith('\r\n', entryEnd) ? entryEnd + 2 : contents.startsWith('\n', entryEnd) ? entryEnd + 1 : entryEnd;
-	return [{ title, edits: [{ start, end, newText: '' }] }];
+	const edits = [{ start, end, newText: '' }];
+	if (json && !comma) {
+		const before = contents.slice(0, start).trimEnd();
+		if (before.endsWith(',')) edits.unshift({ start: before.length - 1, end: before.length, newText: '' });
+	}
+	return [{ title, edits }];
 }
 
-function removeExtraneous(contents, { entry }) {
-	return entry ? removeLines(contents, entry.entryStart, entry.entryEnd, 'Remove this message, which the source does not have') : [];
+function removeExtraneous(contents, { entry, json }) {
+	return entry ? removeLines(contents, { ...entry, json }, 'Remove this message, which the source does not have') : [];
 }
 
-function removeDuplicate(contents, { entryStart }) {
-	const entryEnd = entryStart === undefined ? undefined : entryEndAt(contents, entryStart);
-	return entryEnd === undefined ? [] : removeLines(contents, entryStart, entryEnd, 'Remove this duplicate message');
+function removeDuplicate(contents, { entryStart, json }) {
+	const found = entryStart === undefined ? undefined : entryAt(contents, entryStart);
+	return found ? removeLines(contents, { entryStart, entryEnd: found.end, comma: found.comma, json }, 'Remove this duplicate message') : [];
 }
 
-/** Copies the messages that the source has and the document lacks (see `copyPlan` in analyze.js). */
-function copyMissing(contents, { copy }) {
+/**
+ * Copies the messages that the source has and the document lacks (see `copyPlan` in analyze.js).
+ * Every copy ends with a comma, except in JSON the last one when nothing follows it.
+ */
+function copyMissing(contents, { copy, json }) {
 	if (!copy) return [];
 	const eol = eolOf(contents);
 	let indent = '\t';
@@ -89,13 +100,14 @@ function copyMissing(contents, { copy }) {
 		const lead = contents.slice(startOfLine(contents, copy.first.entryStart), copy.first.entryStart);
 		if (/^[ \t]*$/.test(lead)) indent = lead;
 	}
+	const linesOf = (texts, nothingFollows) => texts.map((text, i) => indent + text + (json && nothingFollows && i === texts.length - 1 ? '' : ','));
 	const edits = [];
 	for (const { after, texts } of copy.groups) {
-		const lines = texts.map(text => indent + text);
 		if (after) {
 			const closeQuote = after.end + after.quote.length;
 			const comma = contents[closeQuote] === ',' ? '' : ',';
-			const addition = eol + lines.join(eol);
+			// A JSON entry with no comma is the last one: what is added goes at the end of the object.
+			const addition = eol + linesOf(texts, !after.comma).join(eol);
 			if (comma && closeQuote === after.entryEnd) {
 				edits.push({ start: closeQuote, end: closeQuote, newText: comma + addition });
 			}
@@ -107,14 +119,15 @@ function copyMissing(contents, { copy }) {
 		else if (copy.first) {
 			const start = startOfLine(contents, copy.first.entryStart);
 			if (start !== copy.first.entryStart - indent.length) return [];
-			edits.push({ start, end: start, newText: lines.map(line => line + eol).join('') });
+			edits.push({ start, end: start, newText: linesOf(texts, false).map(line => line + eol).join('') });
 		}
 		else {
 			// No entries at all: go right after the brace that opens the object.
 			const brace = contents.indexOf('{');
 			if (brace === -1) return [];
-			const restOfLine = contents.slice(brace + 1, contents.indexOf('\n', brace) === -1 ? undefined : contents.indexOf('\n', brace));
-			edits.push({ start: brace + 1, end: brace + 1, newText: eol + lines.join(eol) + (/\S/.test(restOfLine) ? eol : '') });
+			const newline = contents.indexOf('\n', brace);
+			const restOfLine = contents.slice(brace + 1, newline === -1 ? undefined : newline);
+			edits.push({ start: brace + 1, end: brace + 1, newText: eol + linesOf(texts, true).join(eol) + (/\S/.test(restOfLine) ? eol : '') });
 		}
 	}
 	const title = copy.count === 1
@@ -214,7 +227,8 @@ export function rewritesFor(entry) {
 
 const FIXES = {
 	nbsp: replaceNbsp,
-	untranslated: markTranslated,
+	// JSON has no comments to put the marker in.
+	untranslated: (contents, diagnostic) => diagnostic.json ? [] : markTranslated(contents, diagnostic),
 	escape: closeEscapeRun,
 	extraneous: removeExtraneous,
 	duplicate: removeDuplicate,

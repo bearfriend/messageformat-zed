@@ -398,7 +398,7 @@ test('rewritesFor: formatting a message does not also correct its argument names
 
 // --- escape ----------------------------------------------------------------------------------
 
-const CLOSE = `Close the escape run with "'"`;
+const CLOSE = `Close the escape run with “'”`;
 
 test('escape: closes the run at the end of the message and the warning goes away', () => {
 	const { text, fixes, after } = fix(wrap('a: "l\'<b>abc</b>"'), 'escape', { file: 'en.mf.js' });
@@ -638,6 +638,97 @@ test('missing: more than the diagnostic lists are all copied', () => {
 	const source = sourceOf(...keys.map(k => `${k}: "${k.toUpperCase()}"`));
 	const { text } = fix(lines('k0: "Z",'), 'missing', { source });
 	assert.equal(text, lines(`k0: "Z",`, ...keys.slice(1).map(k => `${k}: "${k.toUpperCase()}",`)));
+});
+
+// --- .mf.json --------------------------------------------------------------------------------
+//
+// The same fixes, but a result has to be valid JSON: no trailing commas, and no comments to put a marker in.
+
+const json = (...entries) => `{\n${entries.map(e => `\t${e}`).join(',\n')}\n}\n`;
+const JSON_SOURCE = { locale: 'en', contents: json('"a": "A"', '"b": "B {n}"', '"c": "C"') };
+const validJson = text => assert.doesNotThrow(() => JSON.parse(text), `not valid JSON: ${text}`);
+
+test('json: untranslated has no fix, as JSON has nowhere to put the marker', () => {
+	const doc = json('"a": "A"', '"b": "B {n}"', '"c": "C"');
+	assert.deepEqual(offered(doc, 'untranslated', { file: 'fr.mf.json', source: JSON_SOURCE }), []);
+	assert.equal(offered(lines('a: "A"'), 'untranslated', { file: 'fr.mf.js', source: sourceOf('a: "A"') }).length, 1, 'but the same message in a .mf.js file does');
+});
+
+test('json: removing the last entry takes the comma of the one before it', () => {
+	const doc = json('"a": "Un"', '"b": "Be {n}"', '"c": "Ce"', '"z": "Zed"');
+	const { text, after } = fix(doc, 'extraneous', { file: 'fr.mf.json', source: JSON_SOURCE });
+	validJson(text);
+	assert.equal(text, json('"a": "Un"', '"b": "Be {n}"', '"c": "Ce"'));
+	assert.deepEqual(after, []);
+});
+
+test('json: removing an entry that is not the last or first keeps the commas', () => {
+	const doc = json('"a": "Un"', '"z": "Zed"', '"b": "Be {n}"', '"c": "Ce"');
+	const { text } = fix(doc, 'extraneous', { file: 'fr.mf.json', source: JSON_SOURCE });
+	validJson(text);
+	assert.equal(text, json('"a": "Un"', '"b": "Be {n}"', '"c": "Ce"'));
+	assert.equal(fix(json('"z": "Zed"', '"a": "Un"', '"b": "Be {n}"', '"c": "Ce"'), 'extraneous', { file: 'fr.mf.json', source: JSON_SOURCE }).text, json('"a": "Un"', '"b": "Be {n}"', '"c": "Ce"'));
+});
+
+test('json: removing the only entry leaves an empty object', () => {
+	const { text } = fix(json('"z": "Zed"'), 'extraneous', { file: 'fr.mf.json', source: JSON_SOURCE });
+	validJson(text);
+	assert.equal(text, '{\n}\n');
+});
+
+test('json: removing a duplicate that is the last entry takes the comma of the one before it', () => {
+	const { text } = fix(json('"a": "one"', '"b": "two"', '"a": "uno"'), 'duplicate', { file: 'en.mf.json' });
+	validJson(text);
+	assert.equal(text, json('"a": "one"', '"b": "two"'));
+	const middle = fix(json('"a": "one"', '"a": "uno"', '"b": "two"'), 'duplicate', { file: 'en.mf.json' }).text;
+	assert.equal(middle, json('"a": "one"', '"b": "two"'));
+});
+
+test('json: removing the last entry whose value spans several lines takes the comma of the one before it', () => {
+	const { text } = fix(json('"a": "one"', '"z": "x\\ny"'), 'extraneous', { file: 'fr.mf.json', source: { locale: 'en', contents: json('"a": "A"') } });
+	validJson(text);
+	assert.equal(text, json('"a": "one"'));
+});
+
+test('json: copies the missing messages with a comma after each but the last of the file', () => {
+	const middle = fix(json('"a": "Un"', '"c": "Ce"'), 'missing', { file: 'fr.mf.json', source: JSON_SOURCE }).text;
+	validJson(middle);
+	assert.equal(middle, json('"a": "Un"', '"b": "B {n}"', '"c": "Ce"'));
+
+	const first = fix(json('"c": "Ce"'), 'missing', { file: 'fr.mf.json', source: JSON_SOURCE }).text;
+	validJson(first);
+	assert.equal(first, json('"a": "A"', '"b": "B {n}"', '"c": "Ce"'));
+
+	const last = fix(json('"a": "Un"'), 'missing', { file: 'fr.mf.json', source: JSON_SOURCE }).text;
+	validJson(last);
+	assert.equal(last, json('"a": "Un"', '"b": "B {n}"', '"c": "C"'));
+});
+
+test('json: copies the missing messages into an empty object', () => {
+	for (const empty of ['{}\n', '{\n}\n', '{\r\n}\r\n']) {
+		const text = fix(empty, 'missing', { file: 'fr.mf.json', source: JSON_SOURCE }).text;
+		validJson(text);
+		assert.deepEqual(JSON.parse(text), { a: 'A', b: 'B {n}', c: 'C' });
+	}
+});
+
+test('json: copies each missing message after the entry before it in the source, when it has gaps in the middle and at both ends', () => {
+	const source = { locale: 'en', contents: json('"a": "A"', '"b": "B"', '"c": "C"', '"d": "D"', '"e": "E"') };
+	const text = fix(json('"b": "Be"', '"d": "De"'), 'missing', { file: 'fr.mf.json', source }).text;
+	validJson(text);
+	assert.equal(text, json('"a": "A"', '"b": "Be"', '"c": "C"', '"d": "De"', '"e": "E"'));
+});
+
+test('json: a .mf.js file still gets a trailing comma on what it copies', () => {
+	const source = sourceOf('a: "A"', 'b: "B"');
+	assert.equal(fix(lines('a: "Un",'), 'missing', { source }).text, lines('a: "Un",', 'b: "B",'));
+});
+
+test('json: the other fixes keep the file valid JSON', () => {
+	const doc = json('"p": "{n, plural, one {x} few {y} other {z}}"', '"q": "{n, plural, one {x}}"', '"e": "l\'<b>abc</b>"');
+	for (const code of ['category', 'other', 'category-missing', 'escape']) {
+		for (const found of offered(doc, code, { file: 'fr.mf.json' })) validJson(applyEdits(doc, found.edits));
+	}
 });
 
 const REMOVE = 'Remove unsupported plural categories';

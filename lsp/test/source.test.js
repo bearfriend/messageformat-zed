@@ -108,6 +108,18 @@ test('the source file with the same extension as the target is preferred', () =>
 	assert.equal(summary(resolve(legacy, 'fr.js')).file, 'en.js');
 });
 
+test('a .mf.json source is preferred for a .mf.json target over a plain .json file of the same locale', () => {
+	const dir = project({ 'en.json': '{}', 'en.mf.json': '{}', 'fr.mf.json': '{}' });
+	assert.deepEqual(summary(resolve(dir, 'fr.mf.json')), { locale: 'en', file: 'en.mf.json' });
+});
+
+test('a .mf.json source is found, and each target keeps its own kind of source when both exist', () => {
+	const dir = project({ 'en.mf.js': 'export default {};', 'en.mf.json': '{}', 'fr.mf.js': 'export default {};', 'de.mf.json': '{}' });
+	assert.deepEqual(summary(resolve(dir, 'fr.mf.js')), { locale: 'en', file: 'en.mf.js' });
+	assert.deepEqual(summary(resolve(dir, 'de.mf.json')), { locale: 'en', file: 'en.mf.json' });
+	assert.deepEqual(summary(resolve(project({ 'en.mf.json': '{}', 'fr.mf.json': '{}' }), 'fr.mf.json')), { locale: 'en', file: 'en.mf.json' });
+});
+
 test('locale matching is exact and dotfiles never match', () => {
 	const dir = project({ '.en.mf.js': '', 'enx.mf.js': '', 'fr.mf.js': '' });
 	assert.equal(resolve(dir, 'fr.mf.js'), undefined);

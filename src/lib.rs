@@ -288,7 +288,7 @@ mod tests {
     fn resource_language_config() {
         let cfg = toml("languages/messageformat/config.toml");
         let suffixes = strings(&cfg["path_suffixes"]);
-        assert_eq!(suffixes, ["mf", "mf.js"]);
+        assert_eq!(suffixes, ["mf", "mf.js", "mf.json"]);
         assert_eq!(cfg["line_comments"][0].as_str(), Some("// "));
     }
 

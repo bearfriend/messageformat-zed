@@ -1,0 +1,7 @@
+{
+	"greeting": "Bonjour {name}",
+	"items": "{n, plural, one {# article} other {# articles}}",
+	"save": "Save",
+	"obsolete": "Ancien",
+	"greeting": "Salut {name}"
+}

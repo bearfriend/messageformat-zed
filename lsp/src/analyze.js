@@ -67,6 +67,7 @@ function valueRanges(contents, parsed) {
 			// From the key (or its quote) to the end of the line the entry ends on, past its comma and comment.
 			entryStart: at + lead,
 			entryEnd: at + text.length,
+			comma: entry.comma === ',',
 			keyStart,
 			keyEnd: keyStart + entry.key.length,
 			start,
@@ -189,7 +190,7 @@ function missingMessage(keys, sourceLocale) {
 
 /**
  * How to add the source's messages that the document lacks: each one is copied (key and message as the source
- * wrote them, without its comment) after the nearest entry before it in the source that the document has, or before
+ * wrote them, without its comment or comma) after the nearest entry before it in the source that the document has, or before
  * the first entry. `groups` are those places, in document order; `after` is the entry to follow, or nothing for the start.
  */
 function copyPlan(sourceParsed, parsed, entries, locale) {
@@ -199,7 +200,7 @@ function copyPlan(sourceParsed, parsed, entries, locale) {
 	let count = 0;
 	for (const [key, found] of Object.entries(sourceParsed)) {
 		if (!(key in parsed)) {
-			current.texts.push(`${found.keyQuote}${key}${found.keyQuote}: ${found.valQuote}${found.val}${found.valQuote},`);
+			current.texts.push(`${found.keyQuote}${key}${found.keyQuote}: ${found.valQuote}${found.val}${found.valQuote}`);
 			count++;
 		}
 		else if (byKey.has(key)) {
@@ -234,15 +235,16 @@ function readEntries(contents, fileName, options) {
 }
 
 /**
- * Where the entry that starts at `entryStart` ends, for an entry that `analyze` has no entry for because
- * the key is a duplicate. It is found by parsing the document from there, so the entry is exactly what `mfv` reads.
+ * Where the entry that starts at `entryStart` ends, and whether it has a comma, for an entry that `analyze` has no
+ * entry for because the key is a duplicate. It is found by parsing the document from there, so the entry is exactly what `mfv` reads.
  */
-export function entryEndAt(contents, entryStart) {
+export function entryAt(contents, entryStart) {
 	const from = `\n${contents.slice(entryStart)}`;
 	const { parsed } = parseLocales([{ contents: from, file: 'x.mf.js' }]).x;
 	// The parser finds the first entry anywhere after the start, so make sure that is the one that starts there.
 	const [first] = Object.values(parsed);
-	return first && from.startsWith(String(first)) ? entryStart + String(first).length - 1 : undefined;
+	if (!first || !from.startsWith(String(first))) return undefined;
+	return { end: entryStart + String(first).length - 1, comma: first.comma === ',' };
 }
 
 /** The entries of a document, as `analyze` sees them. Takes the same arguments as `analyze`. */
@@ -261,12 +263,14 @@ export function entriesOf(contents, fileName, options = {}) {
 export function analyze(contents, fileName, options = {}) {
 	const diagnostics = [];
 	const { parsed, duplicateKeys, sourceParsed, entries } = readEntries(contents, fileName, options);
+	// `.mf.json` files are JSON: no comments, no trailing commas. Fixes that edit entries need to know.
+	const json = /\.json$/i.test(String(fileName));
 
 	for (const entry of entries) {
 		const { key, keyStart, keyEnd, start, end, message, locale, source, overrides } = entry;
 		const whole = { start, end: Math.max(end, start + 1) };
 		const add = (severity, code, text, range = whole) =>
-			diagnostics.push({ ...range, severity, code, message: text, entry });
+			diagnostics.push({ ...range, severity, code, message: text, entry, json });
 
 		const nbsps = nbspRanges(message);
 		for (const range of nbsps) {
@@ -317,7 +321,7 @@ export function analyze(contents, fileName, options = {}) {
 	}
 
 	for (const { key, start, end, entryStart } of duplicateKeyRanges(contents, duplicateKeys)) {
-		diagnostics.push({ start, end, entryStart, severity: 'error', code: 'duplicate', message: `Duplicate key "${key}"` });
+		diagnostics.push({ start, end, entryStart, severity: 'error', code: 'duplicate', message: `Duplicate key "${key}"`, json });
 	}
 
 	if (sourceParsed) {
@@ -332,6 +336,7 @@ export function analyze(contents, fileName, options = {}) {
 				code: 'missing',
 				message: missingMessage(missing, options.source.locale),
 				copy: copyPlan(sourceParsed, parsed, entries, options.source.locale),
+				json,
 			});
 		}
 	}

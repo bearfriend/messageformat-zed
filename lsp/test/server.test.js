@@ -230,6 +230,20 @@ test('a source file changed on disk revalidates the open translations that depen
 	});
 });
 
+test('a .mf.json source changed on disk revalidates the open translation, and other json files do not', async () => {
+	const json = (...entries) => `{\n${entries.map(e => `\t${e}`).join(',\n')}\n}\n`;
+	await withWatchedFixture({ 'en.mf.json': json('"hello": "Hello {nom}"'), 'fr.mf.json': json('"hello": "Bonjour {nom}"') }, async ({ client, dir, open }) => {
+		const frUri = open('fr.mf.json');
+		await client.next(withCodes(frUri, []));
+
+		writeFileSync(join(dir, 'en.mf.json'), json('"hello": "Hello {name}"'));
+		await client.next(withCodes(frUri, ['argument']), 3000, true);
+
+		writeFileSync(join(dir, 'package.json'), '{}');
+		await quiet(client, frUri);
+	});
+});
+
 test('a source file that appears, or a config added, on disk is picked up', async () => {
 	const fr = wrapEntries('hello: "Bonjour {nom}"', 'extra: "Plus"');
 	await withWatchedFixture({ 'fr.mf.js': fr }, async ({ client, dir, open }) => {

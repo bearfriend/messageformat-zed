@@ -6,7 +6,7 @@ Two languages are included:
 
 | Language | Use | Matches |
 | --- | --- | --- |
-| **MessageFormat** | Resource files: `key: "message"` entries, optionally wrapped in `export default { ... };` | `.mf` and `.mf.js` |
+| **MessageFormat** | Resource files: `key: "message"` entries, optionally wrapped in `export default { ... };`, or a JSON object | `.mf`, `.mf.js` and `.mf.json` |
 | **MessageFormat Message** | A single bare message such as `Hello {name}!`, meant for embedding inside other files | Markdown fences ```` ```messageformat-message ````; no file extensions |
 
 ## Installing as a dev extension
@@ -18,7 +18,7 @@ Rust must be installed via `rustup`; Zed compiles the extension and the grammar 
 
 ## Language server
 
-Resource files (`.mf` and `.mf.js`) get diagnostics from `messageformat-language-server` (source in [`lsp/`](lsp/)). Zed installs it from npm using its own Node.js, so nothing needs to be set up. The locale for plural rules comes from the file name up to the first dot (`fr-ca.mf.js` is `fr-ca`); a name that isn't a locale (`messages.mf.js`) is treated as `en`.
+Resource files (`.mf`, `.mf.js` and `.mf.json`) get diagnostics from `messageformat-language-server` (source in [`lsp/`](lsp/)). Zed installs it from npm using its own Node.js, so nothing needs to be set up. The locale for plural rules comes from the file name up to the first dot (`fr-ca.mf.js` is `fr-ca`); a name that isn't a locale (`messages.mf.js`) is treated as `en`.
 
 **Checks on every message**
 
@@ -48,7 +48,7 @@ Resource files (`.mf` and `.mf.js`) get diagnostics from `messageformat-language
 
 Add `// mfv-translated` after an entry to mark a message as deliberately identical to its source. The source is read from its open editor buffer if it has one, otherwise from disk, and editing it re-checks every translation open beside it.
 
-Changes made outside the editor are noticed too: the server watches the directory of each open file and the directory of its `mfv.config.json`, and re-checks when a `.mf`, `.mf.js` or `.js` file or the config changes there (for example after `git checkout`, or an `mfv`/translation tool rewriting the source). Files open in an editor buffer are never overridden by what is on disk. A config newly created in a parent directory that had none is only picked up when the file is reopened. This uses Node's file watching directly rather than Zed's LSP file-watcher registration, so it doesn't depend on client support, but it has been verified by tests only, not yet by hand in Zed.
+Changes made outside the editor are noticed too: the server watches the directory of each open file and the directory of its `mfv.config.json`, and re-checks when a `.mf`, `.mf.js`, `.mf.json` or `.js` file or the config changes there (for example after `git checkout`, or an `mfv`/translation tool rewriting the source). Files open in an editor buffer are never overridden by what is on disk. A config newly created in a parent directory that had none is only picked up when the file is reopened. This uses Node's file watching directly rather than Zed's LSP file-watcher registration, so it doesn't depend on client support, but it has been verified by tests only, not yet by hand in Zed.
 
 **Quick fixes.** Open the code actions menu on a diagnostic (the lightbulb, or `cmd-.` in Zed):
 
@@ -71,6 +71,8 @@ The `argument`, `category`, `category-missing`, `other` and `option-missing` fix
 The formatter's `add` is what adds cases, and it adds both plural categories and select options. So adding a missing option to a message that also has a plural short of categories adds those categories too.
 
 There is also a **Format message with mfv** action (kind `refactor.rewrite`) for any entry under the cursor, with or without a diagnostic. It does what `mfv format` does by default: hoists selectors, sorts plural cases, and curls apostrophes. It never renames arguments.
+
+In `.mf.json` files the fixes keep the file valid JSON: removing the last entry also removes the comma before it, copies are written without a trailing comma, and **`untranslated` has no fix**, as JSON has no comments to hold `mfv-translated`.
 
 The `extraneous`, `duplicate` and `missing` fixes edit whole entries rather than going through the formatter. Removing an entry deletes its lines, so nothing is offered if another entry or code shares the line. `missing` copies the source's key and message as it wrote them (quotes and escapes included, its comment left out), indented like the file's first entry, and adds the comma to the entry it follows if that lacks one. The copies are identical to the source, so they show up as `untranslated` warnings until translated, which makes a handy to-do list.
 
@@ -198,6 +200,7 @@ When `../tree-sitter-messageformat` is checked out next to this repo, the tests 
 Manual test files:
 - `test/sample.mf` &mdash; open in Zed to check highlighting by eye
 - `test/manual/messages.mf.js` &mdash; larger sample in module form
+- `test/manual/json/fr.mf.json` and `en.mf.json` &mdash; the same for a JSON resource file: one `missing`, `extraneous`, `duplicate` and `untranslated` each
 - `test/manual/lang/fr-ca.mf.js` and `en.mf.js` &mdash; a translation with one example of every diagnostic, and its source; comments beside each entry say what to expect
 - `test/injection-test.mf.js` &mdash; JS sample of MessageFormat inside another language. Zed can't inject it yet (see above); the automated injection tests are in the grammar repo (`test/host-injections/`)
 

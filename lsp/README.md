@@ -1,6 +1,6 @@
 # messageformat-language-server
 
-A language server (LSP over stdio) that validates MessageFormat resource files such as `.mf` and `.mf.js`. It wraps [`messageformat-validator`](https://www.npmjs.com/package/messageformat-validator) and the [`@formatjs/icu-messageformat-parser`](https://www.npmjs.com/package/@formatjs/icu-messageformat-parser) syntax parser.
+A language server (LSP over stdio) that validates MessageFormat resource files such as `.mf`, `.mf.js` and `.mf.json`. It wraps [`messageformat-validator`](https://www.npmjs.com/package/messageformat-validator) and the [`@formatjs/icu-messageformat-parser`](https://www.npmjs.com/package/@formatjs/icu-messageformat-parser) syntax parser.
 
 It is used by the [MessageFormat extension for Zed](https://github.com/bearfriend/messageformat-zed), which installs it automatically, but it works with any editor that can launch a stdio language server:
 

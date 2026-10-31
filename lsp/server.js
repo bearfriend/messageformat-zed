@@ -106,7 +106,7 @@ function onDiskChange(dir, filename) {
 	const name = filename?.toString();
 	// Open buffers are authoritative (and already reported through didChange).
 	if (name && isOpenPath(join(dir, name))) return;
-	if (name && !/\.(mf|js)$/.test(name) && name !== CONFIG_NAME) return;
+	if (name && !/\.(mf|js|mf\.json)$/.test(name) && name !== CONFIG_NAME) return;
 	for (const uri of watched.get(dir)?.uris ?? []) {
 		const document = documents.get(uri);
 		if (document) schedule(document);

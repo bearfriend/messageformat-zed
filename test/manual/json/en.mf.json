@@ -1,0 +1,6 @@
+{
+	"greeting": "Hello {name}",
+	"items": "{n, plural, one {# item} other {# items}}",
+	"save": "Save",
+	"cancel": "Cancel"
+}

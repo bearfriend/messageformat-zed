@@ -8,7 +8,7 @@ export const CONFIG_NAME = 'mfv.config.json';
 export const DEFAULT_SOURCES = ['en', 'en-us'];
 
 // Extensions a resource file can have, most specific first.
-const EXTENSIONS = ['.mf.js', '.mf', '.js'];
+const EXTENSIONS = ['.mf.json', '.mf.js', '.mf', '.js'];
 
 export const localeOf = fileName => basename(fileName).split('.')[0].toLowerCase();
 

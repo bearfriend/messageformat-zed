@@ -1,6 +1,6 @@
 name = "MessageFormat"
 grammar = "messageformat"
-path_suffixes = ["mf", "mf.js"]
+path_suffixes = ["mf", "mf.js", "mf.json"]
 line_comments = ["// "]
 tab_size = 2
 hard_tabs = true
