@@ -138,11 +138,28 @@ tree-sitter-messageformat (grammar repo)             messageformat-zed (this rep
 - Each `languages/*/config.toml` is owned by this repo.
 - The second grammar's key must be `messageformat_message` (snake case): Zed looks up the wasm export `tree_sitter_messageformat_message`.
 
+## Using it in VS Code
+
+VS Code has no tree-sitter support of its own, so highlighting goes through the [tree-sitter-vscode](https://marketplace.visualstudio.com/items?itemName=AlecGhost.tree-sitter-vscode) extension, and diagnostics and quick fixes through a generic LSP client ([vscode-glspc](https://marketplace.visualstudio.com/items?itemName=zsol.vscode-glspc)). One script sets both up:
+
+```bash
+scripts/install_vscode.py ~/.messageformat-grammar            # directory for the grammar files
+scripts/install_vscode.py ~/.messageformat-grammar --wasm path/to/tree-sitter-messageformat.wasm   # your own parser
+scripts/install_vscode.py ~/.messageformat-grammar --rebuild  # build the parser from the pinned grammar rev instead
+scripts/install_vscode.py ~/.messageformat-grammar --server-js lsp/server.js   # local server instead of npm
+```
+
+It (1) copies `highlights.scm`, `folds.scm` and `tree-sitter-messageformat.wasm` into the directory you give it, (2) installs the extensions with the `code` CLI, including a tiny local one that registers the `messageformat` language for `.mf`, `.mf.js` and `.mf.json`, and (3) adds the matching entries to your user `settings.json` (the tree-sitter and language server settings plus `files.associations` for `*.mf`, `*.mf.js` and `*.mf.json`, so VS Code doesn't treat them as JavaScript or JSON), keeping comments, never overwriting a value you already have (missing `files.associations` entries are added inside your existing object), and writing a `settings.json.bak-<time>` first. It is safe to rerun. Then run **Developer: Reload Window**.
+
+Needs Python 3 and Node (for `npx`, when using the published language server). Nothing is cloned or built by default: the parser and queries are committed in `vscode/` and `languages/messageformat/`, and `scripts/sync-grammar.sh` keeps them at the grammar revision pinned in `extension.toml` (see below). Only `--rebuild` (or `--rev` / `--grammar-repo`) builds one, with `npx tree-sitter-cli build --wasm`, which needs Docker or Emscripten; use `--tree-sitter "<command>"` for your own CLI. Zed's own compiled parser can't be reused: it needs a `libc.so` that VS Code's tree-sitter runtime doesn't provide. Use `--no-lsp` for highlighting only, `--no-install` / `--no-settings` to skip those steps, and `--help` for the rest. Tests: `python3 -m unittest discover -s scripts`.
+
+Limits: VS Code can only host one language server per `glspc` configuration, injections into other languages are not available, and tree-sitter-vscode only provides highlighting, folding and selection ranges. If a file stays plain, check the **Extension Host** log (Developer: Show Logs), because load errors go there rather than to the extension's own output channel.
+
 ## Embedding in other languages (JS, HTML, Java, Kotlin, Swift, ...)
 
 This extension registers the **MessageFormat Message** language so that hosts *can* inject it, but **a Zed extension cannot add injections to a built-in language** ([zed#8795](https://github.com/zed-industries/zed/issues/8795), [zed#65382](https://github.com/zed-industries/zed/issues/65382)). Zed reads injections only from the host language's own `injections.scm`. So today:
 
-- `.mf` / `.mf.js` files are highlighted as resource files.
+- `.mf` / `.mf.js` / `.mf.json` files are highlighted as resource files.
 - Markdown fences tagged `messageformat-message` use the bare-message language (and plain `messageformat` fences use the resource-file language). *Resolution logic is from Zed's source; I haven't confirmed the rendering in Zed itself.*
 - MessageFormat strings inside `.js`, `.html`, `.java`, ... are **not** highlighted yet. That needs the host's `injections.scm` to change in Zed itself.
 
