@@ -106,7 +106,8 @@ class LspCommand:
     def published(cls, npx, node):
         return cls(
             npx,
-            ["-y", SERVER_PACKAGE, "--stdio"],
+            # `@latest` makes npx ask the registry instead of reusing an older copy from its cache
+            ["-y", SERVER_PACKAGE + "@latest", "--stdio"],
             # npx's shebang needs `node` on PATH, which GUI-launched VS Code often lacks (nvm)
             {"PATH": os.path.dirname(node) + os.pathsep + "$PATH"},
         )

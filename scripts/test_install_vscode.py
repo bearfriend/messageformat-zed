@@ -276,8 +276,9 @@ class ManagedSettingsTest(unittest.TestCase):
     def test_published_server_runs_through_npx_with_node_on_path(self):
         s = self.build(lsp=iv.LspCommand.published(npx="/n/bin/npx", node="/n/bin/node"))
         self.assertEqual(s["glspc.server.command"], "/n/bin/npx")
+        # `@latest` makes npx ask the registry; a bare name reuses whatever old copy its cache holds
         self.assertEqual(
-            s["glspc.server.commandArguments"], ["-y", "messageformat-language-server", "--stdio"]
+            s["glspc.server.commandArguments"], ["-y", "messageformat-language-server@latest", "--stdio"]
         )
         self.assertEqual(s["glspc.server.languageId"], ["messageformat"])
         self.assertEqual(s["glspc.server.environmentVariables"], {"PATH": "/n/bin" + os.pathsep + "$PATH"})
