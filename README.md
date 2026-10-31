@@ -161,10 +161,10 @@ The ready-to-use host queries (JavaScript/TypeScript/TSX, JSON, HTML, Java, Kotl
    cargo test
    ```
 
-3. Commit `extension.toml` and `languages/*/*.scm` together.
+3. Commit `extension.toml`, `languages/*/*.scm` and `vscode/` together. The sync also rebuilds the VS Code parser (`vscode/tree-sitter-messageformat.wasm`, plus `folds.scm` and `grammar.lock` recording the `rev`, the wasm's sha256 and the `tree-sitter-cli` version). That build runs `npx tree-sitter-cli build --wasm` and needs Docker or Emscripten; if it fails, nothing is changed.
 4. In Zed run **zed: rebuild dev extension** and open `test/sample.mf`.
 
-`scripts/sync-grammar.sh --check` verifies that the shipped queries equal the queries at each grammar's pinned `rev`; CI runs it on every push. Set `GRAMMAR_REPO=/path/to/local/checkout` to sync from a local clone (only committed content is used).
+`scripts/sync-grammar.sh --check` verifies that the shipped queries equal the queries at each grammar's pinned `rev`, and that `vscode/grammar.lock` is for that `rev` and matches the committed parser's sha256, so a `rev` bump without a re-sync fails; CI runs it on every push (no Docker needed). `--check --verify-build` also rebuilds the parser and requires identical bytes (needs Docker; a different `tree-sitter-cli` version can change the bytes). Set `GRAMMAR_REPO=/path/to/local/checkout` to sync from a local clone (only committed content is used).
 
 If you ever change the grammar `repository` URL, delete `grammars/` so Zed re-clones from the new origin.
 

@@ -23,8 +23,10 @@
 [(plural) (select) (selectordinal)] @keyword
 "offset:" @keyword
 
-; Module wrapper (`export default { ... };`)
-["export" "default"] @keyword
+; Module wrapper (.mf.js: `export { ... }`, `export default { ... }`,
+; `export const|let name = { ... }`; .mf.json: a bare `{ ... }`)
+["export" "default" "const" "let"] @keyword
+(module_start (identifier) @variable)
 (module_end ";" @punctuation.delimiter)
 
 ; Format types

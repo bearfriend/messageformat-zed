@@ -1,0 +1,4 @@
+# Written by scripts/sync-grammar.sh; checked by scripts/sync-grammar.sh --check.
+rev = 8a58f5646ffa93f21652dd082835a56dd424d0ea
+sha256 = b31a1fd17f096edffb66e0935f6e295902d0d2eaca9730e77ac400bce09ae02c
+tree-sitter-cli = 0.27.1

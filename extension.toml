@@ -12,9 +12,9 @@ languages = ["MessageFormat"]
 
 [grammars.messageformat]
 repository = "https://github.com/bearfriend/tree-sitter-messageformat"
-rev = "68354de74e4d75f026d7b5c17698386066f8adf6"
+rev = "8a58f5646ffa93f21652dd082835a56dd424d0ea"
 
 [grammars.messageformat_message]
 repository = "https://github.com/bearfriend/tree-sitter-messageformat"
-rev = "68354de74e4d75f026d7b5c17698386066f8adf6"
+rev = "8a58f5646ffa93f21652dd082835a56dd424d0ea"
 path = "message"

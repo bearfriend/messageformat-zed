@@ -21,8 +21,11 @@ jobs:
       - name: Extension compiles to wasm
         run: cargo check --target wasm32-wasip1
 
-      - name: Shipped queries match the pinned grammar revision
+      - name: Shipped queries and VS Code parser match the pinned grammar revision
         run: scripts/sync-grammar.sh --check
+
+      - name: Script tests
+        run: python3 -m unittest discover -s scripts
 
   language-server:
     runs-on: ubuntu-latest
